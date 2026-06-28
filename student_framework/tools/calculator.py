@@ -16,6 +16,10 @@ def calculator(
     right_operand: Annotated[float, Field(description="Segundo operando numérico.")],
 ) -> str:
     """Calcula una operación binaria simple entre dos operandos numéricos."""
+    #parsear los operandos a float
+    left_operand = float(left_operand)
+    right_operand = float(right_operand)
+    
     if operator == "+":
         return str(left_operand + right_operand)
     if operator == "-":

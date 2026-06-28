@@ -16,6 +16,7 @@ from mia_agents.protocols import Agent
 from .agent import MyAgent
 from .tools.calculator import calculator, calculator_schema
 from .tools.file_reader import file_reader, file_reader_schema
+from .tools.word_counter import count_words, count_words_schema
 
 
 def build_agent(config: dict[str, Any] | None = None) -> Agent:
@@ -40,5 +41,6 @@ def build_agent(config: dict[str, Any] | None = None) -> Agent:
 
     agent.register_tool(calculator, calculator_schema)
     agent.register_tool(file_reader, file_reader_schema)
+    agent.register_tool(count_words, count_words_schema)
 
     return agent

@@ -213,3 +213,6 @@ class MyAgent:
         El M1 deja esto como stub; los tests de M2 verifican el contrato.
         """
         raise NotImplementedError("M2: implementa salida estructurada con reparación")
+
+
+

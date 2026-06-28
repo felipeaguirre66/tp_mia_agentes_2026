@@ -14,8 +14,10 @@ flowchart LR
     LR -->|tool_calls| X[Ejecutor de herramientas]
     X --> T1[calculator]
     X --> T2[file_reader]
+    X --> T3[word_counter]
     T1 --> TM[Mensaje role=tool]
     T2 --> TM
+    T3 --> TM
     TM --> M
     M --> C
     LR -->|sin tool_calls| F[AgentResult.answer]
@@ -46,9 +48,18 @@ Implementacion actual:
    - Entrada: `left_operand`, `operator`, `right_operand`
    - Operadores: `+`, `-`, `*`, `%`
    - Salida: `str`
+   - Ejemplo de uso: `python -m mia_agents.cli run --module student_framework \
+  --message "¿Cuánto es 17 * 23? Usá la calculadora."`
 2. `file_reader`:
    - Entrada: `path`
    - Salida: contenido de texto UTF-8 como `str`
+      - Ejemplo de uso: `python -m mia_agents.cli run --message "¿What is the name of the manager according to tp_mia_agentes_2026/student_framework/test/data.txt?"`
+3. `word_counter`:
+   - Entrada: `str`
+   - Salida: `Int`
+   - Ejemplo de uso: `python -m mia_agents.cli run --module student_framework \
+  --message "Cuantas palabras contiene el texto 'Esta es mi materia preferida de la maestría. Aguante boca.'"`
+
 
 ### 3. Como termina el bucle y que pasa al llegar al limite
 
