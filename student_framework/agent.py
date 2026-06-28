@@ -168,7 +168,7 @@ class MyAgent:
             )
             messages.append(
               {
-                "role": "tool",
+                "role": "assistant",
                 "tool_call_id": tool_call.id,
                 "name": tool_call.name,
                 "content": tool_output if tool_error is None else tool_error,
