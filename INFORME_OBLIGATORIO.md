@@ -48,17 +48,21 @@ Implementacion actual:
    - Entrada: `left_operand`, `operator`, `right_operand`
    - Operadores: `+`, `-`, `*`, `%`
    - Salida: `str`
-   - Ejemplo de uso: `python -m mia_agents.cli run --module student_framework \
-  --message "¿Cuánto es 17 * 23? Usá la calculadora."`
+   - Ejemplo de uso: `python -m mia_agents.cli run --module student_framework --message "¿Cuánto es 17 * 23? Usá la calculadora."`
 2. `file_reader`:
    - Entrada: `path`
    - Salida: contenido de texto UTF-8 como `str`
-      - Ejemplo de uso: `python -m mia_agents.cli run --message "¿What is the name of the manager according to tp_mia_agentes_2026/student_framework/test/data.txt?"`
+      - Ejemplo de uso: `python -m mia_agents.cli run --module student_framework   --message  "¿What is the name of the manager according to /home/felipe/git/udesa/tp_mia_agentes_2026/student_framework/test/data.txt?"`
 3. `word_counter`:
    - Entrada: `str`
    - Salida: `Int`
-   - Ejemplo de uso: `python -m mia_agents.cli run --module student_framework \
-  --message "Cuantas palabras contiene el texto 'Esta es mi materia preferida de la maestría. Aguante boca.'"`
+   - Ejemplo de uso: `python -m mia_agents.cli run --module student_framework --message "Cuantas palabras contiene el texto 'Esta es mi materia preferida de la maestría. Aguante boca.'"`
+
+Ejemplo de uso de un prompt que utiliza más de una herramienta (OJO: no logro que el LLM haga las dos cosas bien):
+
+```bash
+python -m mia_agents.cli run --module student_framework   --message "A manager's current salary is located in /home/felipe/git/udesa/tp_mia_agentes_2026/student_framework/test/data.txt. If the manager's salary is doubled, how much would they earn? Remember to use your tools for reading files and calculating."
+```
 
 
 ### 3. Como termina el bucle y que pasa al llegar al limite

@@ -104,6 +104,7 @@ class MyAgent:
         saw_output_tokens = False
 
         for _ in range(self._max_iterations):
+          print(f"Iteración {_ + 1}/{self._max_iterations} del bucle del agente...")
           response = self._llm.chat(
             messages=messages,
             tools=list(self._schemas.values()),
@@ -128,8 +129,11 @@ class MyAgent:
               "tool_calls": [
                 {
                   "id": tool_call.id,
-                  "name": tool_call.name,
-                  "arguments": tool_call.arguments,
+                  "type": "function",
+                  "function": {
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                  },
                 }
                 for tool_call in response.tool_calls
               ],
@@ -168,7 +172,7 @@ class MyAgent:
             )
             messages.append(
               {
-                "role": "assistant",
+                "role": "tool",
                 "tool_call_id": tool_call.id,
                 "name": tool_call.name,
                 "content": tool_output if tool_error is None else tool_error,
