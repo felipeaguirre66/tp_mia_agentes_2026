@@ -11,10 +11,11 @@ Los tests de conformidad en `tests/conformance/test_m1.py` y
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from mia_agents.protocols import LLMClient
-from mia_agents.types import AgentResult, ToolSchema
+from mia_agents.types import AgentResult, AgentStep, ToolSchema
 
 
 class MyAgent:
@@ -48,7 +49,8 @@ class MyAgent:
         self._system = system_prompt
         self._max_iterations = max_iterations
         self._max_history_messages = max_history_messages
-        # TODO (M1): inicializa el estado interno para las herramientas registradas.
+        self._tools: dict[str, Callable[..., str]] = {}
+        self._schemas: dict[str, ToolSchema] = {}
         # TODO (M2): inicializa la estructura de historial conversacional.
 
     def register_tool(
@@ -65,7 +67,8 @@ class MyAgent:
         El callable se invoca con kwargs que coinciden con la firma.
         Debe devolver una cadena.
         """
-        raise NotImplementedError("M1: implementa el registro de herramientas")
+        self._tools[schema.name] = tool
+        self._schemas[schema.name] = schema
 
     def run(self, user_message: str) -> AgentResult:
         """Ejecuta el bucle del agente hasta una respuesta final o hasta max_iterations.
@@ -91,7 +94,100 @@ class MyAgent:
         `LLMResponse` y exponlos en `AgentResult.input_tokens` /
         `AgentResult.output_tokens`.
         """
-        raise NotImplementedError("M1: implementa el bucle del agente")
+        messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+        steps: list[AgentStep] = []
+        answer = ""
+        error: str | None = None
+        input_tokens_total = 0
+        output_tokens_total = 0
+        saw_input_tokens = False
+        saw_output_tokens = False
+
+        for _ in range(self._max_iterations):
+          print(f"Iteración {_ + 1}/{self._max_iterations} del bucle del agente...")
+          response = self._llm.chat(
+            messages=messages,
+            tools=list(self._schemas.values()),
+            system=self._system,
+          )
+
+          if response.input_tokens is not None:
+            input_tokens_total += response.input_tokens
+            saw_input_tokens = True
+          if response.output_tokens is not None:
+            output_tokens_total += response.output_tokens
+            saw_output_tokens = True
+
+          if not response.tool_calls:
+            answer = response.content or ""
+            break
+
+          messages.append(
+            {
+              "role": "assistant",
+              "content": response.content,
+              "tool_calls": [
+                {
+                  "id": tool_call.id,
+                  "type": "function",
+                  "function": {
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                  },
+                }
+                for tool_call in response.tool_calls
+              ],
+            }
+          )
+
+          for tool_call in response.tool_calls:
+            tool_output: str | None = None
+            tool_error: str | None = None
+
+            try:
+              tool_args = json.loads(tool_call.arguments)
+              if not isinstance(tool_args, dict):
+                raise ValueError("Los argumentos de la herramienta deben ser un objeto JSON.")
+            except Exception as exc:
+              tool_args = None
+              tool_error = f"Argumentos inválidos para {tool_call.name}: {exc}"
+
+            if tool_error is None:
+              tool = self._tools.get(tool_call.name)
+              if tool is None:
+                tool_error = f"Herramienta desconocida: {tool_call.name}"
+              else:
+                try:
+                  tool_output = tool(**tool_args)
+                except Exception as exc:
+                  tool_error = f"Error ejecutando {tool_call.name}: {exc}"
+
+            steps.append(
+              AgentStep(
+                tool_name=tool_call.name,
+                tool_input=tool_call.arguments,
+                tool_output=tool_output,
+                error=tool_error,
+              )
+            )
+            messages.append(
+              {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": tool_call.name,
+                "content": tool_output if tool_error is None else tool_error,
+              }
+            )
+        else:
+          error = f"Se alcanzó el máximo de iteraciones ({self._max_iterations})."
+
+        return AgentResult(
+          answer=answer,
+          steps=steps,
+          error=error,
+          input_tokens=input_tokens_total if saw_input_tokens else None,
+          output_tokens=output_tokens_total if saw_output_tokens else None,
+        )
 
     def structured_call(
         self,
@@ -121,3 +217,6 @@ class MyAgent:
         El M1 deja esto como stub; los tests de M2 verifican el contrato.
         """
         raise NotImplementedError("M2: implementa salida estructurada con reparación")
+
+
+

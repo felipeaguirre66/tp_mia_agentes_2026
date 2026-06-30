@@ -1,0 +1,2 @@
+Manager's name: Bob
+Manager's salary: $150
