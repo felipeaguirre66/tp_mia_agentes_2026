@@ -7,5 +7,5 @@ python -m mia_agents.cli run --module student_framework   --message "A manager's
 - "¿What is the name of the manager according to /home/felipe/git/udesa/tp_mia_agentes_2026/student_framework/test/data.txt?"
  - Bob
 
- - "A manager's current salary is located in /home/felipe/git/udesa/tp_mia_agentes_2026/student_framework/test/data.txt. If the manager's salary is reduced by 84%, how much would they earn?"
+ - "A manager's current salary is located in /home/felipe/git/udesa/tp_mia_agentes_2026/student_framework/test/data.txt. If the manager's salary is doubled, how much would they earn?"
  - $126
