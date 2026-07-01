@@ -58,7 +58,7 @@ Implementacion actual:
    - Salida: `Int`
    - Ejemplo de uso: `python -m mia_agents.cli run --module student_framework --message "Cuantas palabras contiene el texto 'Esta es mi materia preferida de la maestría. Aguante boca.'"`
 
-Ejemplo de uso de un prompt que utiliza más de una herramienta (OJO: no logro que el LLM haga las dos cosas bien):
+Ejemplo de uso de un prompt que utiliza más de una herramienta:
 
 ```bash
 python -m mia_agents.cli run --module student_framework   --message "A manager's current salary is located in /home/felipe/git/udesa/tp_mia_agentes_2026/student_framework/test/data.txt. If the manager's salary is doubled, how much would they earn? Remember to use your tools for reading files and calculating."
