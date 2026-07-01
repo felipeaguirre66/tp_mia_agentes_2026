@@ -87,3 +87,5 @@ Condicion de parada M1 implementada:
 ### 4. Limitaciones conocidas
 
 1. `file_reader` requiere que le pases la ruta explícita al archivo, no hay navegación de directorios ni manejo de rutas relativas.
+2. Al agente le cuesta encadenar varias herramientas, por ejemplo leer un archivo para luego contar palabras en su contenido. Esto se debe a que el LLM no siempre genera correctamente los `tool_calls` encadenados.
+3. El agente no tiene memoria persistente entre ejecuciones, cada llamada a `run` es independiente.
