@@ -54,28 +54,54 @@ class MyAgent:
         # M2: historial conversacional persistente entre llamadas a run.
         self._history: list[dict[str, Any]] = []
 
+    @staticmethod
+    def _drop_leading_orphan_tools(
+        window: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Descarta mensajes `tool` al frente de la ventana.
+
+        Un `tool` cuyo assistant con tool_calls quedó fuera del recorte
+        referencia un tool_call_id inexistente; un proveedor real puede
+        rechazar ese historial como incoherente.
+        """
+        while window and window[0].get("role") == "tool":
+            window = window[1:]
+        return window
+
     def _trim_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Recorta historial preservando el primer mensaje de usuario."""
+        """Recorta historial respetando max_history_messages.
+
+        Prioridad: (1) el mensaje de usuario más reciente — invariante de
+        recencia del M2, nunca puede quedar fuera —, (2) la cola más
+        reciente, (3) el primer mensaje de usuario si sobra presupuesto.
+        """
         budget = max(1, self._max_history_messages)
         if len(messages) <= budget:
             return messages
 
-        first_user_idx = next(
-            (i for i, msg in enumerate(messages) if msg.get("role") == "user"),
-            None,
-        )
-        if first_user_idx is None:
-            return messages[-budget:]
+        user_idxs = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+        if not user_idxs:
+            return self._drop_leading_orphan_tools(messages[-budget:])
 
-        first_user_message = messages[first_user_idx]
+        first_user_idx, last_user_idx = user_idxs[0], user_idxs[-1]
+        last_user_message = messages[last_user_idx]
+
         if budget == 1:
-            return [first_user_message]
+            return [last_user_message]
 
-        without_first_user = [
-            msg for i, msg in enumerate(messages) if i != first_user_idx
-        ]
-        tail = without_first_user[-(budget - 1):]
-        return [first_user_message, *tail]
+        # ¿Entra el primer user (ocupa 1 lugar) sin desalojar al último?
+        short_cut = len(messages) - (budget - 1)
+        if first_user_idx < short_cut and last_user_idx >= short_cut:
+            tail = self._drop_leading_orphan_tools(messages[short_cut:])
+            return [messages[first_user_idx], *tail]
+
+        # Cola pura; si el último user quedó fuera del corte, fijarlo al frente.
+        cut = len(messages) - budget
+        if last_user_idx < cut:
+            tail = self._drop_leading_orphan_tools(messages[-(budget - 1):])
+            return [last_user_message, *tail]
+
+        return self._drop_leading_orphan_tools(messages[cut:])
 
     def register_tool(
         self,
