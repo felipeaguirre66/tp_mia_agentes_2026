@@ -22,7 +22,7 @@ class MyAgent:
     def __init__(
         self,
         llm_client: LLMClient,
-        system_prompt: str = "Eres un asistente útil.",
+        system_prompt: str = "You are a useful assistant. Use the tools available to answer the user only when necessary.",
         max_iterations: int = 10,
         max_history_messages: int = 50,
     ) -> None:
