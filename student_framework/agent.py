@@ -132,7 +132,6 @@ class MyAgent:
         saw_output_tokens = False
 
         for _ in range(self._max_iterations):
-          print(f"Iteración {_ + 1}/{self._max_iterations} del bucle del agente...")
           chat_messages = self._trim_messages(messages)
           response = self._llm.chat(
             messages=list(chat_messages),
