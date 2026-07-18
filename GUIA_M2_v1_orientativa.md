@@ -7,20 +7,6 @@ Correr en cualquier momento: `pytest tests/conformance/test_m2.py -v`
 
 ---
 
-## Estado actual (commit 598eec0)
-
-| Bloque | Estado |
-|---|---|
-| Statefulness (`self._history`) | ✅ hecho |
-| Sliding window (`_trim_messages`) | ✅ hecho, con 2 flancos débiles (ver abajo) |
-| Tracking de tokens | ✅ hecho (venía de M1) |
-| `structured_call` + `final_result` | ❌ stub |
-| Errores recuperables en calculator / file_reader | ❌ sin manejo |
-| Reintentos ante fallos transitorios del LLM | ❌ no existe |
-| Informe | ⚠️ solo sección 1 de 4 |
-
----
-
 ## Bloque 1 — Revisar la memoria que ya escribiste
 
 - El enunciado tiene UNA invariante innegociable: *el mensaje de usuario más
