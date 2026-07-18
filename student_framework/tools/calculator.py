@@ -34,12 +34,12 @@ def calculator(
         return "Error recuperable: módulo por cero — right_operand debe ser distinto de 0."
     
     if operator == "+":
-        return str(left_operand + right_operand)
+        return str(left + right)
     if operator == "-":
-        return str(left_operand - right_operand)
+        return str(left - right)
     if operator == "*":
-        return str(left_operand * right_operand)
-    return str(left_operand % right_operand)
+        return str(left * right)
+    return str(left % right)
 
 
 calculator_schema = ToolSchema.from_callable(calculator)
