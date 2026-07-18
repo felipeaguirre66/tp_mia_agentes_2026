@@ -247,80 +247,67 @@ class MyAgent:
           output_tokens=output_tokens_total if saw_output_tokens else None,
         )
 
-def structured_call(self, prompt, schema, max_repair_attempts=2):
-    """Pide al LLM una respuesta validada contra `schema` (M2).
+    def structured_call(self, prompt, schema, max_repair_attempts=2):
+        """Pide al LLM una respuesta validada contra `schema` (M2).
 
-    Obligatorio: herramienta sintética `final_result` (ver
-    `mia_agents.final_result_tool_schema` / `FINAL_RESULT_TOOL_NAME`).
-    El agente ofrece esa tool al LLM, valida los `arguments` del
-    `tool_call` y reintenta con contexto de reparación si el modelo
-    responde con texto libre o con argumentos inválidos.
+        Ofrece al LLM la herramienta sintética `final_result` (única tool)
+        y termina solo cuando llega un `tool_call` cuyos argumentos validan
+        con `schema.model_validate(...)`. Ante texto libre o argumentos
+        inválidos reintenta con contexto de reparación, hasta
+        `max_repair_attempts` veces; después levanta una excepción limpia.
+        """
+        tool_schema = final_result_tool_schema(schema)
+        messages = [{"role": "user", "content": prompt}]
+        last_error = None
 
-    Implementa esto en el M2:
-      - Pasa `tools=[final_result_tool_schema(schema)]` en cada
-        llamada a `chat` dentro de este método.
-      - Termina solo cuando llega un `tool_call` a `final_result`
-        cuyos argumentos validan con `schema.model_validate(...)`.
-      - Reintenta hasta `max_repair_attempts` incluyendo el fallo en
-        los mensajes (respuesta previa, mensaje `tool`, o user de
-        reparación).
-      - Si tras los reintentos sigue fallando, levanta una excepción
-        limpia (no devuelvas valores parciales ni `None` sin avisar).
-
-    El M1 deja esto como stub; los tests de M2 verifican el contrato.
-    """
-    tool_schema = final_result_tool_schema(schema)
-    messages = [{"role": "user", "content": prompt}]
-    last_error = None
-
-    for _ in range(1 + max_repair_attempts):
-        response = self._llm.chat(
-            messages=list(messages),
-            tools=[tool_schema],
-            system=self._system,
-        )
-
-        fr_call = next(
-            (tc for tc in (response.tool_calls or [])
-             if tc.name == FINAL_RESULT_TOOL_NAME),
-            None,
-        )
-
-        if fr_call is None:
-            # Fallo 1: texto libre (o tool equivocada)
-            last_error = (
-                "No invocaste la herramienta final_result. Debés responder "
-                "únicamente invocando final_result con los campos del schema."
+        for _ in range(1 + max_repair_attempts):
+            response = self._llm.chat(
+                messages=list(messages),
+                tools=[tool_schema],
+                system=self._system,
             )
-            if response.content:
-                messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user", "content": last_error})
-            continue
 
-        try:
-            arguments = json.loads(fr_call.arguments)   # Fallo 2: JSON roto
-            return schema.model_validate(arguments)      # Fallo 3: no valida
-        except Exception as exc:
-            last_error = f"Los argumentos de final_result no validan: {exc}"
-            # devolver el fallo como resultado de la tool, linkeado por id
-            messages.append({
-                "role": "assistant",
-                "content": response.content,
-                "tool_calls": [{
-                    "id": fr_call.id,
-                    "type": "function",
-                    "function": {"name": fr_call.name, "arguments": fr_call.arguments},
-                }],
-            })
-            messages.append({
-                "role": "tool",
-                "tool_call_id": fr_call.id,
-                "name": fr_call.name,
-                "content": f"{last_error} Corregí los argumentos y volvé a invocar final_result.",
-            })
+            fr_call = next(
+                (tc for tc in (response.tool_calls or [])
+                 if tc.name == FINAL_RESULT_TOOL_NAME),
+                None,
+            )
 
-    raise ValueError(
-        f"structured_call agotó {max_repair_attempts} reintentos. Último error: {last_error}"
-    )
+            if fr_call is None:
+                # Fallo 1: texto libre (o tool equivocada)
+                last_error = (
+                    "No invocaste la herramienta final_result. Debés responder "
+                    "únicamente invocando final_result con los campos del schema."
+                )
+                if response.content:
+                    messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": last_error})
+                continue
+
+            try:
+                arguments = json.loads(fr_call.arguments)   # Fallo 2: JSON roto
+                return schema.model_validate(arguments)      # Fallo 3: no valida
+            except Exception as exc:
+                last_error = f"Los argumentos de final_result no validan: {exc}"
+                # devolver el fallo como resultado de la tool, linkeado por id
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [{
+                        "id": fr_call.id,
+                        "type": "function",
+                        "function": {"name": fr_call.name, "arguments": fr_call.arguments},
+                    }],
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": fr_call.id,
+                    "name": fr_call.name,
+                    "content": f"{last_error} Corregí los argumentos y volvé a invocar final_result.",
+                })
+
+        raise ValueError(
+            f"structured_call agotó {max_repair_attempts} reintentos. Último error: {last_error}"
+        )
 
 
