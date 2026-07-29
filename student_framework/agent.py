@@ -12,10 +12,36 @@ Los tests de conformidad en `tests/conformance/test_m1.py` y
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+import time
+from typing import Any, Callable, TypeVar
 
 from mia_agents.protocols import LLMClient
 from mia_agents.types import AgentResult, AgentStep, ToolSchema
+from mia_agents.tool_schema import FINAL_RESULT_TOOL_NAME, final_result_tool_schema
+
+_T = TypeVar("_T")
+
+
+def is_transient_error(exc: BaseException) -> bool:
+    """True si el fallo parece transitorio (timeout, red, 5xx, rate limit)."""
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    msg = str(exc).lower()
+    markers = (
+        "timeout",
+        "timed out",
+        "rate limit",
+        "throttl",
+        "429",
+        "502",
+        "503",
+        "504",
+        "connection reset",
+        "connection refused",
+        "temporarily unavailable",
+        "service unavailable",
+    )
+    return any(m in msg for m in markers)
 
 
 class MyAgent:
@@ -25,6 +51,8 @@ class MyAgent:
         system_prompt: str = "You are a useful assistant. Use the tools available to answer the user only when necessary.",
         max_iterations: int = 10,
         max_history_messages: int = 10,
+        max_transient_retries: int = 3,
+        transient_retry_delay: float = 0.0
     ) -> None:
         """Inicializa el agente.
 
@@ -53,29 +81,84 @@ class MyAgent:
         self._schemas: dict[str, ToolSchema] = {}
         # M2: historial conversacional persistente entre llamadas a run.
         self._history: list[dict[str, Any]] = []
+        self._max_transient_retries = max(0, max_transient_retries)
+        self._transient_retry_delay = max(0.0, transient_retry_delay)
+
+    def _call_with_retry(self, operation: Callable[[], _T]) -> _T:
+        """Ejecuta `operation` reintentando solo fallos transitorios."""
+        attempts = 1 + self._max_transient_retries
+        for attempt in range(attempts):
+            try:
+                return operation()
+            except Exception as exc:
+                if not is_transient_error(exc) or attempt >= attempts - 1:
+                    raise
+                if self._transient_retry_delay > 0:
+                    time.sleep(self._transient_retry_delay * (2**attempt))
+        raise RuntimeError("unreachable")
+
+    def _chat_with_retry(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[ToolSchema],
+    ):
+        return self._call_with_retry(
+            lambda: self._llm.chat(
+                messages=list(messages),
+                tools=list(tools),
+                system=self._system,
+            )
+        )
+
+    @staticmethod
+    def _drop_leading_orphan_tools(
+        window: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Descarta mensajes `tool` al frente de la ventana.
+
+        Un `tool` cuyo assistant con tool_calls quedó fuera del recorte
+        referencia un tool_call_id inexistente; un proveedor real puede
+        rechazar ese historial como incoherente.
+        """
+        while window and window[0].get("role") == "tool":
+            window = window[1:]
+        return window
 
     def _trim_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Recorta historial preservando el primer mensaje de usuario."""
+        """Recorta historial respetando max_history_messages.
+
+        Prioridad: (1) el mensaje de usuario más reciente — invariante de
+        recencia del M2, nunca puede quedar fuera —, (2) la cola más
+        reciente, (3) el primer mensaje de usuario si sobra presupuesto.
+        """
         budget = max(1, self._max_history_messages)
         if len(messages) <= budget:
             return messages
 
-        first_user_idx = next(
-            (i for i, msg in enumerate(messages) if msg.get("role") == "user"),
-            None,
-        )
-        if first_user_idx is None:
-            return messages[-budget:]
+        user_idxs = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+        if not user_idxs:
+            return self._drop_leading_orphan_tools(messages[-budget:])
 
-        first_user_message = messages[first_user_idx]
+        first_user_idx, last_user_idx = user_idxs[0], user_idxs[-1]
+        last_user_message = messages[last_user_idx]
+
         if budget == 1:
-            return [first_user_message]
+            return [last_user_message]
 
-        without_first_user = [
-            msg for i, msg in enumerate(messages) if i != first_user_idx
-        ]
-        tail = without_first_user[-(budget - 1):]
-        return [first_user_message, *tail]
+        # ¿Entra el primer user (ocupa 1 lugar) sin desalojar al último?
+        short_cut = len(messages) - (budget - 1)
+        if first_user_idx < short_cut and last_user_idx >= short_cut:
+            tail = self._drop_leading_orphan_tools(messages[short_cut:])
+            return [messages[first_user_idx], *tail]
+
+        # Cola pura; si el último user quedó fuera del corte, fijarlo al frente.
+        cut = len(messages) - budget
+        if last_user_idx < cut:
+            tail = self._drop_leading_orphan_tools(messages[-(budget - 1):])
+            return [last_user_message, *tail]
+
+        return self._drop_leading_orphan_tools(messages[cut:])
 
     def register_tool(
         self,
@@ -132,12 +215,10 @@ class MyAgent:
         saw_output_tokens = False
 
         for _ in range(self._max_iterations):
-          print(f"Iteración {_ + 1}/{self._max_iterations} del bucle del agente...")
           chat_messages = self._trim_messages(messages)
-          response = self._llm.chat(
-            messages=list(chat_messages),
+          response = self._chat_with_retry(
+            messages=chat_messages,
             tools=list(self._schemas.values()),
-            system=self._system,
           )
 
           if response.input_tokens is not None:
@@ -188,7 +269,7 @@ class MyAgent:
                 tool_error = f"Herramienta desconocida: {tool_call.name}"
               else:
                 try:
-                  tool_output = tool(**tool_args)
+                  tool_output = self._call_with_retry(lambda: tool(**tool_args))
                 except Exception as exc:
                   tool_error = f"Error ejecutando {tool_call.name}: {exc}"
 
@@ -221,34 +302,66 @@ class MyAgent:
           output_tokens=output_tokens_total if saw_output_tokens else None,
         )
 
-    def structured_call(
-        self,
-        prompt: str,
-        schema: Any,
-        max_repair_attempts: int = 2,
-    ) -> Any:
+    def structured_call(self, prompt, schema, max_repair_attempts=2):
         """Pide al LLM una respuesta validada contra `schema` (M2).
 
-        Obligatorio: herramienta sintética `final_result` (ver
-        `mia_agents.final_result_tool_schema` / `FINAL_RESULT_TOOL_NAME`).
-        El agente ofrece esa tool al LLM, valida los `arguments` del
-        `tool_call` y reintenta con contexto de reparación si el modelo
-        responde con texto libre o con argumentos inválidos.
-
-        Implementa esto en el M2:
-          - Pasa `tools=[final_result_tool_schema(schema)]` en cada
-            llamada a `chat` dentro de este método.
-          - Termina solo cuando llega un `tool_call` a `final_result`
-            cuyos argumentos validan con `schema.model_validate(...)`.
-          - Reintenta hasta `max_repair_attempts` incluyendo el fallo en
-            los mensajes (respuesta previa, mensaje `tool`, o user de
-            reparación).
-          - Si tras los reintentos sigue fallando, levanta una excepción
-            limpia (no devuelvas valores parciales ni `None` sin avisar).
-
-        El M1 deja esto como stub; los tests de M2 verifican el contrato.
+        Ofrece al LLM la herramienta sintética `final_result` (única tool)
+        y termina solo cuando llega un `tool_call` cuyos argumentos validan
+        con `schema.model_validate(...)`. Ante texto libre o argumentos
+        inválidos reintenta con contexto de reparación, hasta
+        `max_repair_attempts` veces; después levanta una excepción limpia.
         """
-        raise NotImplementedError("M2: implementa salida estructurada con reparación")
+        tool_schema = final_result_tool_schema(schema)
+        messages = [{"role": "user", "content": prompt}]
+        last_error = None
 
+        for _ in range(1 + max_repair_attempts):
+            response = self._chat_with_retry(
+                messages=messages,
+                tools=[tool_schema],
+            )
+
+            fr_call = next(
+                (tc for tc in (response.tool_calls or [])
+                 if tc.name == FINAL_RESULT_TOOL_NAME),
+                None,
+            )
+
+            if fr_call is None:
+                # Fallo 1: texto libre (o tool equivocada)
+                last_error = (
+                    "No invocaste la herramienta final_result. Debés responder "
+                    "únicamente invocando final_result con los campos del schema."
+                )
+                if response.content:
+                    messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": last_error})
+                continue
+
+            try:
+                arguments = json.loads(fr_call.arguments)   # Fallo 2: JSON roto
+                return schema.model_validate(arguments)      # Fallo 3: no valida
+            except Exception as exc:
+                last_error = f"Los argumentos de final_result no validan: {exc}"
+                # devolver el fallo como resultado de la tool, linkeado por id
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [{
+                        "id": fr_call.id,
+                        "type": "function",
+                        "function": {"name": fr_call.name, "arguments": fr_call.arguments},
+                    }],
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": fr_call.id,
+                    "name": fr_call.name,
+                    "content": f"{last_error} Corregí los argumentos y volvé a invocar final_result.",
+                })
+
+        raise ValueError(
+            f"structured_call agotó {max_repair_attempts} reintentos. Último error: {last_error}"
+        )
 
 
