@@ -24,7 +24,7 @@ class MyAgent:
         llm_client: LLMClient,
         system_prompt: str = "You are a useful assistant. Use the tools available to answer the user only when necessary.",
         max_iterations: int = 10,
-        max_history_messages: int = 50,
+        max_history_messages: int = 10,
     ) -> None:
         """Inicializa el agente.
 
@@ -51,7 +51,31 @@ class MyAgent:
         self._max_history_messages = max_history_messages
         self._tools: dict[str, Callable[..., str]] = {}
         self._schemas: dict[str, ToolSchema] = {}
-        # TODO (M2): inicializa la estructura de historial conversacional.
+        # M2: historial conversacional persistente entre llamadas a run.
+        self._history: list[dict[str, Any]] = []
+
+    def _trim_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Recorta historial preservando el primer mensaje de usuario."""
+        budget = max(1, self._max_history_messages)
+        if len(messages) <= budget:
+            return messages
+
+        first_user_idx = next(
+            (i for i, msg in enumerate(messages) if msg.get("role") == "user"),
+            None,
+        )
+        if first_user_idx is None:
+            return messages[-budget:]
+
+        first_user_message = messages[first_user_idx]
+        if budget == 1:
+            return [first_user_message]
+
+        without_first_user = [
+            msg for i, msg in enumerate(messages) if i != first_user_idx
+        ]
+        tail = without_first_user[-(budget - 1):]
+        return [first_user_message, *tail]
 
     def register_tool(
         self,
@@ -94,7 +118,11 @@ class MyAgent:
         `LLMResponse` y exponlos en `AgentResult.input_tokens` /
         `AgentResult.output_tokens`.
         """
-        messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+        messages: list[dict[str, Any]] = [
+          *self._history,
+          {"role": "user", "content": user_message},
+        ]
+        messages = self._trim_messages(messages)
         steps: list[AgentStep] = []
         answer = ""
         error: str | None = None
@@ -105,8 +133,9 @@ class MyAgent:
 
         for _ in range(self._max_iterations):
           print(f"Iteración {_ + 1}/{self._max_iterations} del bucle del agente...")
+          chat_messages = self._trim_messages(messages)
           response = self._llm.chat(
-            messages=messages,
+            messages=list(chat_messages),
             tools=list(self._schemas.values()),
             system=self._system,
           )
@@ -120,6 +149,7 @@ class MyAgent:
 
           if not response.tool_calls:
             answer = response.content or ""
+            messages.append({"role": "assistant", "content": answer})
             break
 
           messages.append(
@@ -180,6 +210,8 @@ class MyAgent:
             )
         else:
           error = f"Se alcanzó el máximo de iteraciones ({self._max_iterations})."
+
+        self._history = self._trim_messages(messages)
 
         return AgentResult(
           answer=answer,
