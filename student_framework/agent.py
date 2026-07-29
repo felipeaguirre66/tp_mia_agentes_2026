@@ -12,11 +12,36 @@ Los tests de conformidad en `tests/conformance/test_m1.py` y
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+import time
+from typing import Any, Callable, TypeVar
 
 from mia_agents.protocols import LLMClient
 from mia_agents.types import AgentResult, AgentStep, ToolSchema
 from mia_agents.tool_schema import FINAL_RESULT_TOOL_NAME, final_result_tool_schema
+
+_T = TypeVar("_T")
+
+
+def is_transient_error(exc: BaseException) -> bool:
+    """True si el fallo parece transitorio (timeout, red, 5xx, rate limit)."""
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    msg = str(exc).lower()
+    markers = (
+        "timeout",
+        "timed out",
+        "rate limit",
+        "throttl",
+        "429",
+        "502",
+        "503",
+        "504",
+        "connection reset",
+        "connection refused",
+        "temporarily unavailable",
+        "service unavailable",
+    )
+    return any(m in msg for m in markers)
 
 
 class MyAgent:
@@ -26,6 +51,8 @@ class MyAgent:
         system_prompt: str = "You are a useful assistant. Use the tools available to answer the user only when necessary.",
         max_iterations: int = 10,
         max_history_messages: int = 10,
+        max_transient_retries: int = 3,
+        transient_retry_delay: float = 0.0
     ) -> None:
         """Inicializa el agente.
 
@@ -54,6 +81,35 @@ class MyAgent:
         self._schemas: dict[str, ToolSchema] = {}
         # M2: historial conversacional persistente entre llamadas a run.
         self._history: list[dict[str, Any]] = []
+        self._max_transient_retries = max(0, max_transient_retries)
+        self._transient_retry_delay = max(0.0, transient_retry_delay)
+
+    def _call_with_retry(self, operation: Callable[[], _T]) -> _T:
+        """Ejecuta `operation` reintentando solo fallos transitorios."""
+        attempts = 1 + self._max_transient_retries
+        for attempt in range(attempts):
+            try:
+                return operation()
+            except Exception as exc:
+                if not is_transient_error(exc) or attempt >= attempts - 1:
+                    raise
+                if self._transient_retry_delay > 0:
+                    time.sleep(self._transient_retry_delay * (2**attempt))
+        raise RuntimeError("unreachable")
+
+    def _chat_with_retry(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[ToolSchema],
+    ):
+        return self._call_with_retry(
+            lambda: self._llm.chat(
+                messages=list(messages),
+                tools=list(tools),
+                system=self._system,
+            )
+        )
 
     @staticmethod
     def _drop_leading_orphan_tools(
@@ -160,10 +216,9 @@ class MyAgent:
 
         for _ in range(self._max_iterations):
           chat_messages = self._trim_messages(messages)
-          response = self._llm.chat(
-            messages=list(chat_messages),
+          response = self._chat_with_retry(
+            messages=chat_messages,
             tools=list(self._schemas.values()),
-            system=self._system,
           )
 
           if response.input_tokens is not None:
@@ -214,7 +269,7 @@ class MyAgent:
                 tool_error = f"Herramienta desconocida: {tool_call.name}"
               else:
                 try:
-                  tool_output = tool(**tool_args)
+                  tool_output = self._call_with_retry(lambda: tool(**tool_args))
                 except Exception as exc:
                   tool_error = f"Error ejecutando {tool_call.name}: {exc}"
 
@@ -261,10 +316,9 @@ class MyAgent:
         last_error = None
 
         for _ in range(1 + max_repair_attempts):
-            response = self._llm.chat(
-                messages=list(messages),
+            response = self._chat_with_retry(
+                messages=messages,
                 tools=[tool_schema],
-                system=self._system,
             )
 
             fr_call = next(

@@ -67,11 +67,11 @@ El chequeo de escape no busca el substring `".."` (daría falsos positivos con n
 - Argumentos inválidos en herramientas (no numéricos, operador no soportado, módulo por cero, rutas malformadas o fuera del sandbox): mensaje accionable y reintento del LLM en el mismo bucle.
 - Salida estructurada malformada (texto libre, JSON roto, schema inválido): reparación con contexto del error, tope de reintentos, excepción limpia al agotarlos.
 - Historial que excede el presupuesto de contexto: sliding window con invariante de recencia y limpieza de mensajes `tool` huérfanos.
+- Fallos transitorios del cliente LLM y de las herramientas (timeouts, errores de conexión, 429/5xx, rate limit): `_call_with_retry` / `_chat_with_retry` reintentan hasta `max_transient_retries` veces (delay configurable con backoff; por defecto `0` para no alargar tests). Si no es transitorio o se agotan los reintentos, la excepción aflora limpia.
 
 **Fuera del alcance (deliberadamente):**
 - Archivos existentes pero no legibles como texto UTF-8 (binarios) o sin permisos: se devuelve un mensaje claro pero no se considera recuperable — ningún argumento corregido lo arregla.
 - Presupuestos de memoria `< 3`: degradan el tool use porque no entran a la vez el mensaje del usuario, el tool_call y su resultado (ver sección 1).
 - Respuestas del modelo con formato válido pero semánticamente incorrectas (p. ej. un número equivocado que valida contra el schema): la validación garantiza forma, no verdad.
 - Contextos que exceden la ventana del propio proveedor aun respetando `max_history_messages` (mensajes individuales enormes).
-
-*(Pendiente: reintentos ante fallos transitorios del cliente LLM — timeouts, 5xx, rate limits; al implementarlos, mover ese punto a "dentro del alcance".)*
+- Errores de aplicación no transitorios (p. ej. `ValueError` de schema o argumentos): no se reintentan a ciegas.

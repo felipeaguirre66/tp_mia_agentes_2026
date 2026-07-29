@@ -36,6 +36,10 @@ def build_agent(config: dict[str, Any] | None = None) -> Agent:
     
     if "max_history_messages" in config:
         kwargs["max_history_messages"] = config["max_history_messages"]
+    if "max_transient_retries" in config:
+        kwargs["max_transient_retries"] = config["max_transient_retries"]
+    if "transient_retry_delay" in config:
+        kwargs["transient_retry_delay"] = config["transient_retry_delay"]
 
     agent = MyAgent(**kwargs)
 
