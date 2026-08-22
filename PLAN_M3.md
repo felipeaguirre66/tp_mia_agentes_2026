@@ -1,10 +1,10 @@
 # Plan paso a paso — Milestone 3
 
-Estado actual del repo (verificado): `student_framework/agent.py` tiene el loop
-ReAct de M1 + memoria sliding-window y `structured_call` de M2;
-`build_agent()` registra las tools de juguete (calculator, file_reader,
-word_counter); `mia_world/` y los 8 escenarios ya están; **no existe `eval/`**.
-Todo lo que falta es la capa de M3.
+> **Actualización 2026-08-22.** Este documento conserva el plan de diseño
+> original. La capa `eval/`, los cuatro experimentos, el judge, el reporte,
+> el timeout aislado y sus tests ya están implementados. Lo pendiente es la
+> corrida final con Ollama, la anotación humana y completar los resultados de
+> `INFORME_OBLIGATORIO_M3.md`.
 
 ---
 

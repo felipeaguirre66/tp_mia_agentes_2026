@@ -7,7 +7,7 @@
 > informes los rechaza por defecto, precisamente porque un informe hecho
 > con el mock se ve idéntico a uno real.
 
-Modelo de todos los números: `⟨PENDIENTE: modelo⟩` vía Ollama.
+Modelo de todos los números: `qwen3.6` vía Ollama.
 Corridas incluidas: `⟨PENDIENTE⟩`. Git SHA: `⟨PENDIENTE⟩`.
 
 ---
@@ -29,7 +29,7 @@ rompiendo el contrato de M1/M2:
    los verbos de `mia_world.make_world_tools(world)` en lugar de las tools
    de juguete (que en una sala de escape son ruido que compite por la
    atención del modelo) y sube los presupuestos. Sin `"world"`, el
-   comportamiento es exactamente el de M2: los 124 tests de conformidad no
+   comportamiento es exactamente el de M2: los 78 tests de conformidad no
    se enteran del cambio.
 2. **System prompt de dominio** (`student_framework/prompts.py`,
    `ESCAPE_V1`): protocolo de exploración (`look` primero, `examine` sobre
@@ -46,9 +46,11 @@ rompiendo el contrato de M1/M2:
 trazado, métricas, taxonomía de fallos, LLM-as-judge e informe. Es
 infraestructura de evaluación, no de agente.
 
-**Una modificación al agente**, gateada y apagada por defecto:
-`repair_textual_tool_calls` (ver experimento D). El baseline corre con el
-bucle ReAct clásico.
+**Una modificación al agente**, gateada y apagada por defecto en el contrato
+M1/M2: `repair_textual_tool_calls` (ver experimento D). La configuración final
+`baseline` la activa; `repair_off` conserva el bucle ReAct clásico como
+ablación. Así los experimentos A–C cambian una sola variable sin quedar
+dominados por un fallo de formato ya conocido.
 
 ### Decisiones de diseño del harness que condicionan los números
 
@@ -65,9 +67,9 @@ bucle ReAct clásico.
   esté alucinando ids sin parar. El tracer detecta el fallo por el prefijo
   del output.
 - **Presupuestos duros además de `max_iterations`**: tope de tool calls y
-  wall-clock por caso, implementados con una excepción que hereda de
-  `BaseException` para que el `except Exception` del bucle del agente no la
-  degrade a un tool error cualquiera.
+  wall-clock por caso. Cada caso corre en un subprocess terminable, por lo
+  que el timeout también cubre una llamada LLM bloqueada; el presupuesto de
+  tools conserva la excepción `BaseException` para atravesar el loop.
 
 ---
 
@@ -155,10 +157,10 @@ sea reproducible. Hipótesis fijadas antes de correr.
 | **A** | `ESCAPE_V1` → `BASELINE` (prompt genérico) | El prompt especializado sube pass@1 en medium/hard y baja `hallucinated_id` | ⟨PENDIENTE⟩ |
 | **B** | `max_history_messages` ∈ {6, 20, 40} | La ventana corta destruye `apartment-keys` y `backtracking-vault` (hay que recordar el mapa) y es indiferente en `study-with-key`. Mide el valor de M2 sobre *este* problema | ⟨PENDIENTE⟩ |
 | **C** | `examine` → no-op (mismo esquema, sin información); `max_iterations` ∈ {10, 20, 40} | Sin `examine` colapsa todo lo que dependa de contenedores. El barrido de iteraciones separa "no sabe" de "no le alcanzó el presupuesto" | ⟨PENDIENTE⟩ |
-| **D** | `repair_textual_tool_calls` on/off | Recuperar tool calls emitidas como texto sube pass@1 en todas las dificultades y hace caer `text_tool_call` y `premature_stop` | ⟨PENDIENTE⟩ |
+| **D** | `baseline` (reparación ON) → `repair_off` | Recuperar tool calls emitidas como texto sube pass@1 en todas las dificultades y hace caer `text_tool_call` y `premature_stop` | ⟨PENDIENTE⟩ |
 
 **Sobre el experimento D.** Surgió de la primera corrida real, no del
-diseño previo: `⟨modelo⟩` emite a veces la siguiente acción como JSON dentro
+diseño previo: `qwen3.6` puede emitir la siguiente acción como JSON dentro
 de `content` en vez de como `tool_call` estructurada. El bucle ReAct ve
 `tool_calls == []`, concluye que el modelo terminó y corta el episodio justo
 cuando el agente se estaba corrigiendo. La reparación
@@ -180,7 +182,7 @@ reportan como direccionales, no como efectos medidos.
 
 - **N chico.** 8 escenarios × 3 repeticiones por brazo. Alcanza para
   direcciones, no para afirmaciones.
-- **Un solo modelo, y chico.** Todos los números son de `⟨modelo⟩`. Buena
+- **Un solo modelo.** Todos los números son de `qwen3.6`. Buena
   parte de los fallos observados son de disciplina de tool-calling, que es
   precisamente donde un modelo de 8B es más frágil: no se puede separar
   "límite del framework" de "límite del modelo" sin un segundo proveedor.
@@ -214,7 +216,8 @@ reportan como direccionales, no como efectos medidos.
 ## Reproducibilidad
 
 ```bash
-python -m pytest tests/ -q          # 150 tests
-bash eval/run_all.sh                # baseline + 4 experimentos + informe
-python eval/report.py results/suite-*/*.jsonl --judge -o reports/m3-judged.md
+python -m pytest tests/ -q          # 163 tests antes de la corrida final
+REPEATS=3 bash eval/run_all.sh       # 120 casos + informe cuantitativo
+python -m eval.judge score results/final-*/*.jsonl --limit 10 \
+  --out reports/judge-scores.json --human-template reports/human-scores.json
 ```

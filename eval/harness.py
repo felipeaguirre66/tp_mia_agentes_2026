@@ -27,6 +27,28 @@ DEFAULT_MAX_TOOL_CALLS = 60
 DEFAULT_TIMEOUT_S = 300.0
 
 
+def _record_base(
+    sc: Scenario,
+    config_name: str,
+    repeat: int,
+    config: dict[str, Any],
+    noop_names: set[str],
+) -> dict[str, Any]:
+    return {
+        "scenario": sc.id,
+        "difficulty": sc.difficulty,
+        "config": config_name,
+        "repeat": repeat,
+        "noop_tools": sorted(noop_names),
+        "agent_config": {
+            k: v for k, v in config.items() if k not in ("llm_client", "world", "tools")
+        },
+        "optimal_calls": OPTIMAL_CALLS.get(sc.id),
+        "brute_force_calls": BRUTE_FORCE_CALLS.get(sc.id),
+        "goal": sc.goal,
+    }
+
+
 def run_case(
     scenario: Scenario | str,
     config_name: str = "baseline",
@@ -74,19 +96,7 @@ def run_case(
 
     probe: CountingLLM | None = None
 
-    record: dict[str, Any] = {
-        "scenario": sc.id,
-        "difficulty": sc.difficulty,
-        "config": config_name,
-        "repeat": repeat,
-        "noop_tools": sorted(noop_names),
-        "agent_config": {
-            k: v for k, v in config.items() if k not in ("llm_client", "world", "tools")
-        },
-        "optimal_calls": OPTIMAL_CALLS.get(sc.id),
-        "brute_force_calls": BRUTE_FORCE_CALLS.get(sc.id),
-        "goal": sc.goal,
-    }
+    record = _record_base(sc, config_name, repeat, config, noop_names)
 
     t0 = time.perf_counter()
     status = "ok"
@@ -152,6 +162,60 @@ def run_case(
             },
             "trace": tracer.trace(),
             "steps": [asdict(s) for s in getattr(result, "steps", [])],
+        }
+    )
+    return record
+
+
+def make_isolated_failure_record(
+    scenario_id: str,
+    config_name: str,
+    *,
+    repeat: int,
+    status: str,
+    error: str,
+    latency_s: float,
+    scenarios_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Registro serializable cuando el worker muere antes de responder.
+
+    El proceso hijo posee el mundo y la traza. Si el padre debe terminarlo,
+    ese estado parcial deja de ser observable; se marca explícitamente en
+    vez de inventar progreso o una traza vacía aparentemente completa.
+    """
+    sc = fresh_scenario(scenario_id, scenarios_dir)
+    world = sc.initial_world
+    config = get_config(config_name)
+    noop_names = set(config.pop("noop_tools", None) or ())
+    achieved, reason = check_goal(world, sc.goal)
+    record = _record_base(sc, config_name, repeat, config, noop_names)
+    record.update(
+        {
+            "status": status,
+            "error": error,
+            "goal_achieved": bool(achieved),
+            "goal_reason": reason,
+            "n_tool_calls": 0,
+            "n_tool_errors": 0,
+            "tool_error_rate": None,
+            "latency_s": round(latency_s, 3),
+            "answer": None,
+            "agent_error": None,
+            "input_tokens": None,
+            "output_tokens": None,
+            "n_llm_calls": None,
+            "max_messages_per_call": 0,
+            "textual_responses": [],
+            "repaired_tool_calls": 0,
+            "partial_trace_unavailable": True,
+            "final_state": {
+                "room": world.current_room,
+                "inventory": list(world.inventory),
+                "opened": [],
+                "event_log": list(world.event_log),
+            },
+            "trace": [],
+            "steps": [],
         }
     )
     return record

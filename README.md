@@ -420,8 +420,8 @@ no dependan de ese parámetro — usen `final_result`.
 ## Milestone 3 — Mundo simulado y evaluación
 
 El equipo docente proporciona en `mia_world/` un mundo simulado tipo
-sala de escape y, en `scenarios/`, cuatro escenarios de dificultad
-creciente (`easy`, `medium`, `hard`, `extreme`).
+sala de escape y, en `scenarios/`, ocho escenarios distribuidos en cuatro
+dificultades (`easy`, `medium`, `hard`, `extreme`).
 
 ```bash
 # Listar los escenarios disponibles
@@ -451,6 +451,47 @@ pytest tests/conformance/test_m3_world.py
 El M3 completo también requiere su propia infraestructura de evaluación
 para correr el agente, capturar resultados, analizar errores y comparar
 ablaciones. Ese entregable está descrito en [`ENUNCIADO_M3.md`](../ENUNCIADO_M3.md).
+
+### Evaluación reproducible del M3
+
+Con el entorno virtual activo y Ollama en ejecución:
+
+```bash
+# Verifica el circuito completo sin usar un modelo real.
+python eval/run.py --dry-run --scenarios all
+
+# Smoke del sistema final y de la ablación ReAct clásica.
+python eval/run.py --scenarios study-with-key \
+  --config baseline,repair_off --repeats 3
+
+# Suite final: 120 casos con REPEATS=3 y reporte cuantitativo.
+REPEATS=3 bash eval/run_all.sh
+```
+
+`baseline` es el sistema final: prompt especializado, ventana de 40 mensajes,
+40 iteraciones y reparación de tool calls textuales activa. `repair_off` cambia
+únicamente esa última variable y es el control del experimento D.
+
+Cada caso corre en un subprocess. `--timeout` cubre el wall-clock completo,
+incluidas llamadas LLM bloqueadas, y una salida existente nunca se
+sobrescribe. El reporte rechaza resultados dry-run, cohortes incompletas,
+duplicados o archivos producidos con distinto modelo/proveedor/git SHA.
+
+Después de la suite, el judge cualitativo se ejecuta una sola vez y persiste
+sus scores junto con la plantilla para la anotación humana:
+
+```bash
+python -m eval.judge score results/final-<stamp>/*.jsonl \
+  --limit 10 \
+  --out reports/judge-scores-<stamp>.json \
+  --human-template reports/human-scores-<stamp>.json
+
+# Completar a mano los tres scores 1-5 de la plantilla y luego comparar.
+python -m eval.judge compare \
+  --judge reports/judge-scores-<stamp>.json \
+  --human reports/human-scores-<stamp>.json \
+  --out reports/judge-agreement-<stamp>.json
+```
 
 ### Nota sobre contexto con Ollama
 

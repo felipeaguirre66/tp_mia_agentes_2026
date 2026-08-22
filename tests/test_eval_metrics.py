@@ -8,11 +8,23 @@ from pathlib import Path
 import pytest
 
 from eval.failures import classify
+from eval.configs import get_config
 from eval.fake_llm import LookOnceLLM, ScriptedLLM, WINNING_SCRIPTS
 from eval.harness import run_case
-from eval.judge import RubricScore, build_prompt, compare_with_human, format_trace
-from eval.metrics import enrich, failure_breakdown, load_run, summarize
+from eval.judge import (
+    RubricScore,
+    _compare_files,
+    _human_template,
+    _score_payload,
+    _write_json,
+    build_prompt,
+    compare_with_human,
+    format_trace,
+    select_human_sample,
+)
+from eval.metrics import compare_configs, enrich, failure_breakdown, load_run, summarize
 from eval.report import build_report
+from eval.validation import ResultValidationError, validate_result_files
 
 
 def _case(**over):
@@ -41,6 +53,27 @@ def _case(**over):
     }
     base.update(over)
     return base
+
+
+def test_experiment_arms_change_only_the_declared_variable() -> None:
+    baseline = get_config("baseline")
+    assert baseline["repair_textual_tool_calls"] is True
+
+    expected_diffs = {
+        "prompt_baseline": {"prompt"},
+        "mem_6": {"max_history_messages"},
+        "mem_20": {"max_history_messages"},
+        "mem_40": set(),
+        "noop_examine": {"noop_tools"},
+        "iters_10": {"max_iterations"},
+        "iters_20": {"max_iterations"},
+        "repair_off": {"repair_textual_tool_calls"},
+    }
+    for name, expected in expected_diffs.items():
+        arm = get_config(name)
+        keys = set(baseline) | set(arm)
+        actual = {key for key in keys if baseline.get(key) != arm.get(key)}
+        assert actual == expected, name
 
 
 # --- taxonomía ----------------------------------------------------------------
@@ -109,6 +142,16 @@ def test_pass_at_k_differs_from_pass_at_1() -> None:
     assert s["pass_at_k"] == 1.0, "pass@k debe capturar que lo resolvió alguna vez"
 
 
+def test_pass_at_k_never_merges_distinct_configs() -> None:
+    records = enrich([
+        _case(config="baseline", goal_achieved=False),
+        _case(config="repair_off", goal_achieved=True),
+    ])
+    summary = summarize(records)
+    assert summary["pass_at_1"] == 0.5
+    assert summary["pass_at_k"] == 0.5
+
+
 def test_action_efficiency_only_counts_solved_cases() -> None:
     records = enrich([
         _case(goal_achieved=True, n_tool_calls=3),   # óptimo -> 1.0
@@ -120,6 +163,30 @@ def test_action_efficiency_only_counts_solved_cases() -> None:
     assert summarize(records)["action_efficiency"] == pytest.approx(0.75)
 
 
+def test_oracle_overhead_keeps_initial_look_visible() -> None:
+    record = run_case(
+        "study-with-key",
+        llm_client=ScriptedLLM([("look", {}), *WINNING_SCRIPTS["study-with-key"]]),
+    )
+    enriched = enrich([record])[0]
+    assert enriched["goal_achieved"] is True
+    assert enriched["action_efficiency"] == 0.75
+    assert enriched["excess_tool_calls"] == 1
+
+
+def test_config_comparison_uses_scenario_intersection() -> None:
+    records = enrich([
+        _case(scenario="easy", config="baseline", goal_achieved=True),
+        _case(scenario="medium", difficulty="medium", config="baseline", goal_achieved=False),
+        _case(scenario="medium", difficulty="medium", config="mem_6", goal_achieved=True),
+    ])
+    comparison = compare_configs(records, "baseline", "mem_6")
+    assert comparison["scenarios"] == ["medium"]
+    assert comparison["control_summary"]["pass_at_1"] == 0.0
+    assert comparison["treatment_summary"]["pass_at_1"] == 1.0
+    assert comparison["delta"]["pass_at_1"] == 1.0
+
+
 # --- integración con el harness ----------------------------------------------
 
 
@@ -129,7 +196,11 @@ def test_end_to_end_report_from_real_records(tmp_path: Path) -> None:
 
     path = tmp_path / "run.jsonl"
     with path.open("w", encoding="utf-8") as fh:
-        fh.write(json.dumps({"_meta": {"model": "test", "provider": "fake", "scenarios": ["a"], "repeats": 1, "configs": {}}}) + "\n")
+        fh.write(json.dumps({"_meta": {
+            "model": "test", "provider": "fake", "git_sha": "abc",
+            "scenarios": ["study-with-key", "color-locks"], "repeats": 1,
+            "configs": {"baseline": {}}, "dry_run": False,
+        }}) + "\n")
         for rec in (won, lost):
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
@@ -177,11 +248,65 @@ def test_human_agreement_reports_exact_and_within_1() -> None:
     assert out["recuperacion"]["within_1"] == 0.0
 
 
+def test_judge_sample_covers_repeat_zero_then_long_failures() -> None:
+    scenarios = [
+        ("easy", "easy"),
+        ("medium-a", "medium"),
+        ("medium-b", "medium"),
+        ("hard-a", "hard"),
+        ("hard-b", "hard"),
+        ("extreme-a", "extreme"),
+        ("extreme-b", "extreme"),
+        ("extreme-c", "extreme"),
+    ]
+    records = []
+    for scenario, difficulty in scenarios:
+        records.append(_case(scenario=scenario, difficulty=difficulty, repeat=0))
+        records.append(_case(
+            scenario=scenario,
+            difficulty=difficulty,
+            repeat=1,
+            n_tool_calls=20 if scenario == "hard-a" else 2,
+        ))
+    selected = select_human_sample(records, 10)
+    assert len(selected) == 10
+    assert {(r["scenario"], r["repeat"]) for r in selected[:8]} == {
+        (scenario, 0) for scenario, _ in scenarios
+    }
+    assert (selected[8]["scenario"], selected[8]["repeat"]) == ("hard-a", 1)
+
+
+def test_persisted_judge_and_human_artifacts_compare(tmp_path: Path) -> None:
+    class FakeJudge:
+        def structured_call(self, _prompt, _schema):
+            return RubricScore(
+                exploracion=4,
+                uso_evidencia=3,
+                recuperacion=5,
+                justificacion="Traza consistente.",
+            )
+
+    record = _case(config="baseline", goal_achieved=True)
+    validation = {"provider": "fake", "model": "fake", "git_sha": "abc"}
+    judged_payload = _score_payload(validation, [record], FakeJudge())
+    human_payload = _human_template(validation, [record])
+    for axis, value in zip(("exploracion", "uso_evidencia", "recuperacion"), (4, 4, 5)):
+        human_payload["scores"][0][axis] = value
+
+    judged_path = tmp_path / "judge.json"
+    human_path = tmp_path / "human.json"
+    _write_json(judged_path, judged_payload)
+    _write_json(human_path, human_payload)
+    compared = _compare_files(judged_path, human_path)
+    assert compared["agreement"]["exploracion"]["exact_agreement"] == 1.0
+    assert compared["agreement"]["uso_evidencia"]["within_1"] == 1.0
+
+
 # --- experimento D: reparación de tool calls textuales ------------------------
 
 
-def test_repair_is_off_by_default_and_stops_the_episode() -> None:
-    """El baseline debe seguir cortando: es el brazo de control."""
+def test_repair_off_is_the_ablation_and_baseline_repairs() -> None:
+    """El sistema final repara; repair_off conserva el ReAct clásico."""
     from mia_agents.types import LLMResponse
 
     class TextualLLM:
@@ -200,13 +325,13 @@ def test_repair_is_off_by_default_and_stops_the_episode() -> None:
                 return LLMResponse(content='{"name": "use", "parameters": {"item": "llave_oro", "target": "puerta_principal"}}')
             return LLMResponse(content="Listo, salí.")
 
-    off = run_case("study-with-key", "baseline", llm_client=TextualLLM())
+    off = run_case("study-with-key", "repair_off", llm_client=TextualLLM())
     assert off["n_tool_calls"] == 0, "sin reparación no debe ejecutarse ninguna tool"
     assert off["goal_achieved"] is False
     assert off["repaired_tool_calls"] == 0
     assert classify(off)["primary_failure"] == "text_tool_call"
 
-    on = run_case("study-with-key", "repair_on", llm_client=TextualLLM())
+    on = run_case("study-with-key", "baseline", llm_client=TextualLLM())
     assert on["repaired_tool_calls"] == 3
     assert [e["tool"] for e in on["trace"]] == ["examine", "take", "use"]
     assert on["goal_achieved"] is True, "con reparación, la misma corrida gana"
@@ -220,7 +345,7 @@ def test_repair_does_not_fire_on_plain_prose() -> None:
         def chat(self, messages, tools=None, system=None, temperature=0.2, response_format=None):
             return LLMResponse(content="Usé examine sobre la alfombra y tomé la llave. Ya está.")
 
-    rec = run_case("study-with-key", "repair_on", llm_client=ProseLLM())
+    rec = run_case("study-with-key", "baseline", llm_client=ProseLLM())
     assert rec["repaired_tool_calls"] == 0
     assert rec["n_tool_calls"] == 0
     assert classify(rec)["primary_failure"] == "premature_stop"
@@ -236,7 +361,11 @@ def test_report_refuses_dry_run_results(tmp_path: Path) -> None:
     rec = run_case("study-with-key", llm_client=LookOnceLLM())
     path = tmp_path / "dry.jsonl"
     with path.open("w", encoding="utf-8") as fh:
-        fh.write(json.dumps({"_meta": {"dry_run": True, "model": "LookOnceLLM", "provider": "dry-run"}}) + "\n")
+        fh.write(json.dumps({"_meta": {
+            "dry_run": True, "model": "LookOnceLLM", "provider": "dry-run",
+            "git_sha": "abc", "scenarios": ["study-with-key"], "repeats": 1,
+            "configs": {"baseline": {}},
+        }}) + "\n")
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     with pytest.raises(DryRunReportError) as excinfo:
@@ -252,6 +381,87 @@ def test_report_accepts_real_results(tmp_path: Path) -> None:
     rec = run_case("study-with-key", llm_client=ScriptedLLM(WINNING_SCRIPTS["study-with-key"]))
     path = tmp_path / "real.jsonl"
     with path.open("w", encoding="utf-8") as fh:
-        fh.write(json.dumps({"_meta": {"dry_run": False, "model": "x", "provider": "y"}}) + "\n")
+        fh.write(json.dumps({"_meta": {
+            "dry_run": False, "model": "x", "provider": "y", "git_sha": "abc",
+            "scenarios": ["study-with-key"], "repeats": 1,
+            "configs": {"baseline": {}},
+        }}) + "\n")
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     assert "pass@1" in build_report([path])
+
+
+def test_report_reads_persisted_qualitative_artifacts(tmp_path: Path) -> None:
+    rec = run_case("study-with-key", llm_client=ScriptedLLM(WINNING_SCRIPTS["study-with-key"]))
+    path = tmp_path / "real.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"_meta": {
+            "dry_run": False, "model": "x", "provider": "y", "git_sha": "abc",
+            "scenarios": ["study-with-key"], "repeats": 1,
+            "configs": {"baseline": {}},
+        }}) + "\n")
+        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    judge_path = tmp_path / "judge.json"
+    agreement_path = tmp_path / "agreement.json"
+    _write_json(judge_path, {"scores": [{
+        "scenario": "study-with-key", "repeat": 0, "goal_achieved": True,
+        "exploracion": 4, "uso_evidencia": 5, "recuperacion": 4,
+        "justificacion": "Bien.", "judge_error": None,
+    }]})
+    _write_json(agreement_path, {"agreement": {
+        "exploracion": {"n": 1, "exact_agreement": 1.0, "within_1": 1.0, "mean_abs_diff": 0.0}
+    }})
+    report = build_report(
+        [path],
+        judge_scores_path=judge_path,
+        judge_agreement_path=agreement_path,
+    )
+    assert "Dimensión cualitativa (artefacto persistido)" in report
+    assert "Acuerdo juez-humano" in report
+
+
+def test_validation_rejects_mixed_identity(tmp_path: Path) -> None:
+    rec = run_case("study-with-key", llm_client=LookOnceLLM())
+    paths = []
+    for index, model in enumerate(("a", "b")):
+        config = "baseline" if index == 0 else "repair_off"
+        file_record = {**rec, "config": config}
+        path = tmp_path / f"run-{index}.jsonl"
+        with path.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"_meta": {
+                "dry_run": False, "model": model, "provider": "ollama", "git_sha": "abc",
+                "scenarios": ["study-with-key"], "repeats": 1,
+                "configs": {config: {}},
+            }}) + "\n")
+            fh.write(json.dumps(file_record, ensure_ascii=False) + "\n")
+        paths.append(path)
+    with pytest.raises(ResultValidationError, match="incompatible"):
+        validate_result_files(paths)
+
+
+def test_validation_rejects_duplicate_case_across_files(tmp_path: Path) -> None:
+    rec = run_case("study-with-key", llm_client=LookOnceLLM())
+    paths = []
+    for index in range(2):
+        path = tmp_path / f"duplicate-{index}.jsonl"
+        with path.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"_meta": {
+                "dry_run": False, "model": "x", "provider": "ollama", "git_sha": "abc",
+                "scenarios": ["study-with-key"], "repeats": 1,
+                "configs": {"baseline": {}},
+            }}) + "\n")
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        paths.append(path)
+    with pytest.raises(ResultValidationError, match="repite casos"):
+        validate_result_files(paths)
+
+
+def test_validation_rejects_missing_case(tmp_path: Path) -> None:
+    path = tmp_path / "missing.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"_meta": {
+            "dry_run": False, "model": "x", "provider": "ollama", "git_sha": "abc",
+            "scenarios": ["study-with-key"], "repeats": 2,
+            "configs": {"baseline": {}},
+        }}) + "\n")
+    with pytest.raises(ResultValidationError, match="cohorte incompleta"):
+        validate_result_files([path])

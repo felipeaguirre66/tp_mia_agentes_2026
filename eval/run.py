@@ -6,9 +6,9 @@
     python eval/run.py --config exp_a --repeats 3
     python eval/run.py --dry-run                # sin proveedor LLM, valida la infra
 
-Escribe **JSONL append-only** en `results/`: una primera línea de metadatos
-(`{"_meta": ...}`) y una línea por caso. Append-only para que una corrida
-interrumpida a mitad conserve todo lo ya ejecutado.
+Escribe un JSONL nuevo en `results/`: una primera línea de metadatos
+(`{"_meta": ...}`) y una línea por caso. Hace flush después de cada caso
+para conservar una corrida interrumpida y rechaza sobrescribir un path.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from eval.configs import get_config, resolve_configs  # noqa: E402
 from eval.harness import (  # noqa: E402
     DEFAULT_MAX_TOOL_CALLS,
     DEFAULT_TIMEOUT_S,
-    run_case,
+    make_isolated_failure_record,
 )
 
 RESULTS_DIR = REPO_ROOT / "results"
@@ -78,6 +78,100 @@ def _provider_info(dry_run: bool) -> dict[str, Any]:
     return {"provider": "unknown", "model": None}
 
 
+def _worker_command(
+    scenario_id: str,
+    config_name: str,
+    repeat: int,
+    max_tool_calls: int,
+    timeout_s: float,
+    dry_run: bool,
+) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "eval.case_worker",
+        "--scenario",
+        scenario_id,
+        "--config",
+        config_name,
+        "--repeat",
+        str(repeat),
+        "--max-tool-calls",
+        str(max_tool_calls),
+        "--timeout",
+        str(timeout_s),
+    ]
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def run_case_isolated(
+    scenario_id: str,
+    config_name: str,
+    *,
+    repeat: int,
+    max_tool_calls: int,
+    timeout_s: float,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Ejecuta un caso en un proceso terminable por wall-clock."""
+    command = _worker_command(
+        scenario_id,
+        config_name,
+        repeat,
+        max_tool_calls,
+        timeout_s,
+        dry_run,
+    )
+    t0 = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        elapsed = time.perf_counter() - t0
+        return make_isolated_failure_record(
+            scenario_id,
+            config_name,
+            repeat=repeat,
+            status="budget_timeout",
+            error=f"Presupuesto de wall-clock agotado ({timeout_s}s).",
+            latency_s=elapsed,
+        )
+
+    elapsed = time.perf_counter() - t0
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "worker sin detalle").strip()
+        return make_isolated_failure_record(
+            scenario_id,
+            config_name,
+            repeat=repeat,
+            status="crash",
+            error=f"Worker terminó con código {completed.returncode}: {detail[-1200:]}",
+            latency_s=elapsed,
+        )
+
+    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    try:
+        record = json.loads(lines[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        return make_isolated_failure_record(
+            scenario_id,
+            config_name,
+            repeat=repeat,
+            status="crash",
+            error=f"Worker no devolvió un registro JSON válido: {exc}",
+            latency_s=elapsed,
+        )
+    return record
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="eval/run.py")
     parser.add_argument(
@@ -107,11 +201,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.repeats < 1:
+        parser.error("--repeats debe ser >= 1.")
+    if args.max_tool_calls < 1:
+        parser.error("--max-tool-calls debe ser >= 1.")
+    if args.timeout <= 0:
+        parser.error("--timeout debe ser > 0.")
+
     scenarios = resolve_scenarios(args.scenarios)
     config_names = resolve_configs(args.config)
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = Path(args.out) if args.out else RESULTS_DIR / f"run-{stamp}.jsonl"
+    if out_path.exists():
+        raise SystemExit(
+            f"La salida ya existe y no se sobrescribirá: {out_path}. "
+            "Elegí otro --out."
+        )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     meta = {
@@ -134,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
 
     n_ok = 0
     t_start = time.perf_counter()
-    with out_path.open("w", encoding="utf-8") as fh:
+    with out_path.open("x", encoding="utf-8") as fh:
         fh.write(json.dumps(meta, ensure_ascii=False) + "\n")
         fh.flush()
 
@@ -143,24 +249,19 @@ def main(argv: list[str] | None = None) -> int:
             for sc in scenarios:
                 for repeat in range(args.repeats):
                     i += 1
-                    llm_client = None
-                    if args.dry_run:
-                        from eval.fake_llm import LookOnceLLM
-
-                        llm_client = LookOnceLLM()
                     print(
                         f"[{i}/{total}] {config_name} :: {sc.id} (rep {repeat})",
                         end=" ",
                         file=sys.stderr,
                         flush=True,
                     )
-                    record = run_case(
+                    record = run_case_isolated(
                         sc.id,
                         config_name,
                         repeat=repeat,
-                        llm_client=llm_client,
                         max_tool_calls=args.max_tool_calls,
                         timeout_s=args.timeout,
+                        dry_run=args.dry_run,
                     )
                     fh.write(json.dumps(record, ensure_ascii=False) + "\n")
                     fh.flush()  # append-only real: nada se pierde si cortás

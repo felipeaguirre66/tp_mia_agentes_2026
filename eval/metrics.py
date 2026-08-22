@@ -49,7 +49,7 @@ def load_run(path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
 
 def enrich(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Agrega campos derivados: eficiencia y clasificación de fallo."""
+    """Agrega campos derivados: eficiencia, overhead y clasificación."""
     out = []
     for r in records:
         r = dict(r)
@@ -57,6 +57,13 @@ def enrich(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         calls = r.get("n_tool_calls") or 0
         r["action_efficiency"] = (
             (optimal / calls) if (r["goal_achieved"] and optimal and calls) else None
+        )
+        # El óptimo del enunciado es un lower bound de oráculo: no incluye
+        # necesariamente acciones de observación como el `look` inicial que
+        # pide ESCAPE_V1. El overhead deja esa diferencia visible sin alterar
+        # el óptimo oficial ni fingir que eficiencia=1 es siempre alcanzable.
+        r["excess_tool_calls"] = (
+            (calls - optimal) if (r["goal_achieved"] and optimal is not None) else None
         )
         r.update(classify(r))
         out.append(r)
@@ -81,18 +88,25 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     efficiencies = [r["action_efficiency"] for r in achieved if r["action_efficiency"]]
     error_rates = [r["tool_error_rate"] for r in records if r.get("tool_error_rate") is not None]
 
-    # pass@k: por escenario, ¿lo resolvió alguna de sus repeticiones?
-    by_scenario: dict[str, list[dict[str, Any]]] = {}
+    # pass@k: por BRAZO + escenario, ¿lo resolvió alguna repetición?
+    # Incluir config evita que un éxito de repair_on convierta en éxito al
+    # baseline cuando el reporte agrega varios experimentos a la vez.
+    by_scenario: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for r in records:
-        by_scenario.setdefault(r["scenario"], []).append(r)
+        key = (str(r.get("config")), str(r["scenario"]))
+        by_scenario.setdefault(key, []).append(r)
     pass_at_k = _mean([float(any(x["goal_achieved"] for x in v)) for v in by_scenario.values()])
 
     return {
         "n": n,
-        "n_scenarios": len(by_scenario),
+        "n_scenarios": len({r["scenario"] for r in records}),
+        "n_config_scenarios": len(by_scenario),
         "pass_at_1": round(len(achieved) / n, 3),
         "pass_at_k": pass_at_k,
         "action_efficiency": _mean(efficiencies),
+        "median_excess_tool_calls": _median(
+            [float(r["excess_tool_calls"]) for r in achieved if r.get("excess_tool_calls") is not None]
+        ),
         "tool_error_rate": _mean(error_rates),
         "median_tool_calls": _median([float(r["n_tool_calls"]) for r in records]),
         "median_latency_s": _median([float(r["latency_s"]) for r in records]),
@@ -100,6 +114,59 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "mean_output_tokens": _mean([float(r["output_tokens"]) for r in records if r.get("output_tokens")]),
         "max_messages_per_call": max((r.get("max_messages_per_call") or 0) for r in records),
         "repaired_tool_calls": sum((r.get("repaired_tool_calls") or 0) for r in records),
+    }
+
+
+def compare_configs(
+    records: list[dict[str, Any]],
+    control: str,
+    treatment: str,
+) -> dict[str, Any]:
+    """Compara dos brazos sobre la intersección exacta de escenarios.
+
+    El baseline completo cubre ocho escenarios, mientras que varios brazos
+    solo corren medium+hard. Comparar agregados sin emparejar cohortes sesga
+    el delta por composición de dificultad.
+    """
+    control_records = [r for r in records if r.get("config") == control]
+    treatment_records = [r for r in records if r.get("config") == treatment]
+    control_scenarios = {r["scenario"] for r in control_records}
+    treatment_scenarios = {r["scenario"] for r in treatment_records}
+    cohort = sorted(control_scenarios & treatment_scenarios)
+    if not cohort:
+        raise ValueError(
+            f"No hay escenarios comparables entre {control!r} y {treatment!r}."
+        )
+
+    control_matched = [r for r in control_records if r["scenario"] in cohort]
+    treatment_matched = [r for r in treatment_records if r["scenario"] in cohort]
+    control_summary = summarize(control_matched)
+    treatment_summary = summarize(treatment_matched)
+
+    delta: dict[str, float | None] = {}
+    for metric in (
+        "pass_at_1",
+        "pass_at_k",
+        "action_efficiency",
+        "tool_error_rate",
+        "median_tool_calls",
+        "median_excess_tool_calls",
+    ):
+        before = control_summary.get(metric)
+        after = treatment_summary.get(metric)
+        delta[metric] = (
+            round(float(after) - float(before), 3)
+            if before is not None and after is not None
+            else None
+        )
+
+    return {
+        "control": control,
+        "treatment": treatment,
+        "scenarios": cohort,
+        "control_summary": control_summary,
+        "treatment_summary": treatment_summary,
+        "delta": delta,
     }
 
 

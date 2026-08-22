@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
 from eval.catalog import DIFFICULTY_ORDER, OPTIMAL_CALLS  # noqa: E402
 from eval.failures import DESCRIPTIONS  # noqa: E402
 from eval.metrics import (  # noqa: E402
+    compare_configs,
     enrich,
     failure_breakdown,
     group_by,
@@ -32,6 +33,7 @@ from eval.metrics import (  # noqa: E402
     load_run,
     summarize,
 )
+from eval.validation import ResultValidationError, validate_result_files  # noqa: E402
 
 REPORTS_DIR = REPO_ROOT / "reports"
 
@@ -57,20 +59,26 @@ SUMMARY_COLS = [
     ("pass_at_1", "pass@1"),
     ("pass_at_k", "pass@k"),
     ("action_efficiency", "eficiencia"),
+    ("median_excess_tool_calls", "overhead calls"),
     ("tool_error_rate", "err. tools"),
     ("median_tool_calls", "calls (mediana)"),
     ("median_latency_s", "latencia s"),
 ]
 
 
-def _summary_rows(groups: dict[str, list[dict[str, Any]]], order: list[str] | None = None) -> list[list[Any]]:
+def _summary_rows(
+    groups: dict[str, list[dict[str, Any]]],
+    order: list[str] | None = None,
+    columns: list[tuple[str, str]] | None = None,
+) -> list[list[Any]]:
+    columns = columns or SUMMARY_COLS
     keys = order or sorted(groups)
     rows = []
     for key in keys:
         if key not in groups:
             continue
         s = summarize(groups[key])
-        rows.append([key] + [s.get(col) for col, _ in SUMMARY_COLS])
+        rows.append([key] + [s.get(col) for col, _ in columns])
     return rows
 
 
@@ -83,6 +91,8 @@ def build_report(
     judge: bool = False,
     judge_limit: int = 12,
     allow_dry_run: bool = False,
+    judge_scores_path: Path | None = None,
+    judge_agreement_path: Path | None = None,
 ) -> str:
     all_records: list[dict[str, Any]] = []
     metas: list[dict[str, Any]] = []
@@ -139,22 +149,51 @@ def build_report(
             "",
         ]
 
+    try:
+        validation = validate_result_files(paths, allow_dry_run=allow_dry_run)
+    except ResultValidationError as exc:
+        raise SystemExit(f"Resultados inválidos: {exc}") from exc
+
+    repeats = {m.get("repeats") for m in metas}
+    repeat_count = next(iter(repeats)) if len(repeats) == 1 else None
+    summary_cols = [
+        (
+            key,
+            (
+                "escenario resuelto"
+                if key == "pass_at_k" and repeat_count == 1
+                else f"pass@{repeat_count}"
+                if key == "pass_at_k" and repeat_count is not None
+                else label
+            ),
+        )
+        for key, label in SUMMARY_COLS
+    ]
+
     # --- resultados globales -------------------------------------------
-    headers = ["grupo"] + [label for _, label in SUMMARY_COLS]
+    headers = ["grupo"] + [label for _, label in summary_cols]
     parts += [
         "## Resultados",
         "",
         "### Global",
         "",
-        _table(headers, _summary_rows({"todo": records})),
+        f"Cohorte validada: **{validation['n_cases']} casos**, "
+        f"modelo **{validation.get('model')}**, git **{validation.get('git_sha')}**.",
+        "",
+        _table(headers, _summary_rows({"todo": records}, columns=summary_cols)),
         "",
         "### Por dificultad",
         "",
-        _table(headers, _summary_rows(group_by(records, "difficulty"), DIFFICULTY_ORDER)),
+        _table(
+            headers,
+            _summary_rows(
+                group_by(records, "difficulty"), DIFFICULTY_ORDER, summary_cols
+            ),
+        ),
         "",
         "### Por configuración",
         "",
-        _table(headers, _summary_rows(group_by(records, "config"))),
+        _table(headers, _summary_rows(group_by(records, "config"), columns=summary_cols)),
         "",
         "### Por escenario",
         "",
@@ -181,17 +220,95 @@ def build_report(
                 s["pass_at_1"],
                 s["pass_at_k"],
                 s["action_efficiency"],
+                s["median_excess_tool_calls"],
                 s["tool_error_rate"],
                 s["median_tool_calls"],
             ]
         )
     parts += [
         _table(
-            ["escenario", "dif.", "óptimo", "n", "pass@1", "pass@k", "eficiencia", "err. tools", "calls (mediana)"],
+            [
+                "escenario",
+                "dif.",
+                "óptimo",
+                "n",
+                "pass@1",
+                "pass@k",
+                "eficiencia",
+                "overhead calls",
+                "err. tools",
+                "calls (mediana)",
+            ],
             scenario_rows,
         ),
         "",
     ]
+
+    # --- experimentos con cohortes emparejadas ------------------------
+    experiment_names = {
+        "prompt_baseline": "A — prompt genérico",
+        "mem_6": "B — memoria 6",
+        "mem_20": "B — memoria 20",
+        "noop_examine": "C — examine no-op",
+        "iters_10": "C — 10 iteraciones",
+        "iters_20": "C — 20 iteraciones",
+        "repair_off": "D — reparación OFF",
+    }
+    comparisons = []
+    present_configs = {str(r.get("config")) for r in records}
+    if "baseline" in present_configs:
+        for treatment, label in experiment_names.items():
+            if treatment not in present_configs:
+                continue
+            comparison = compare_configs(records, "baseline", treatment)
+            base = comparison["control_summary"]
+            arm = comparison["treatment_summary"]
+            delta = comparison["delta"]
+            comparisons.append(
+                [
+                    label,
+                    ", ".join(comparison["scenarios"]),
+                    base["pass_at_1"],
+                    arm["pass_at_1"],
+                    None if delta["pass_at_1"] is None else 100 * delta["pass_at_1"],
+                    base["pass_at_k"],
+                    arm["pass_at_k"],
+                    base["action_efficiency"],
+                    arm["action_efficiency"],
+                    delta["median_tool_calls"],
+                ]
+            )
+    if comparisons:
+        parts += [
+            "## Comparación de experimentos",
+            "",
+            "Cada brazo se compara con `baseline` sobre la intersección exacta "
+            "de escenarios; el delta de pass@1 está en puntos porcentuales.",
+            "",
+            _table(
+                [
+                    "brazo",
+                    "cohorte",
+                    "base pass@1",
+                    "brazo pass@1",
+                    "Δ pp",
+                    "base pass@k",
+                    "brazo pass@k",
+                    "base efic.",
+                    "brazo efic.",
+                    "Δ calls",
+                ],
+                comparisons,
+            ),
+            "",
+            "> El óptimo es un lower bound de oráculo. `overhead calls` hace "
+            "visible el costo de exploración (por ejemplo, el `look` inicial) "
+            "sin modificar los óptimos oficiales del enunciado.",
+            "",
+            "> Con tres repeticiones por brazo, los deltas son evidencia "
+            "direccional y no significancia estadística.",
+            "",
+        ]
 
     # --- análisis de errores --------------------------------------------
     failed = [r for r in records if not r["goal_achieved"]]
@@ -267,6 +384,56 @@ def build_report(
             "",
         ]
 
+    if judge_scores_path is not None:
+        payload = json.loads(judge_scores_path.read_text(encoding="utf-8"))
+        scores = payload.get("scores") or []
+        ok = [row for row in scores if not row.get("judge_error")]
+        parts += [
+            "## Dimensión cualitativa (artefacto persistido)",
+            "",
+            f"Scores válidos: **{len(ok)}/{len(scores)}**. Fuente: "
+            f"`{judge_scores_path}`.",
+            "",
+            _table(
+                ["escenario", "rep", "goal", "exploración", "evidencia", "recuperación", "justificación"],
+                [
+                    [
+                        row["scenario"],
+                        row.get("repeat"),
+                        row.get("goal_achieved"),
+                        row.get("exploracion"),
+                        row.get("uso_evidencia"),
+                        row.get("recuperacion"),
+                        (row.get("justificacion") or "")[:120],
+                    ]
+                    for row in ok
+                ],
+            ),
+            "",
+        ]
+
+    if judge_agreement_path is not None:
+        payload = json.loads(judge_agreement_path.read_text(encoding="utf-8"))
+        agreement = payload.get("agreement") or {}
+        parts += [
+            "### Acuerdo juez-humano",
+            "",
+            _table(
+                ["eje", "n", "acuerdo exacto", "acuerdo ±1", "diferencia abs. media"],
+                [
+                    [
+                        axis,
+                        values.get("n"),
+                        values.get("exact_agreement"),
+                        values.get("within_1"),
+                        values.get("mean_abs_diff"),
+                    ]
+                    for axis, values in agreement.items()
+                ],
+            ),
+            "",
+        ]
+
     # --- compliance de M2 -------------------------------------------------
     max_msgs = max((r.get("max_messages_per_call") or 0) for r in records)
     budgets = {r["agent_config"].get("max_history_messages") for r in records}
@@ -292,6 +459,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--judge", action="store_true", help="Correr el LLM-as-judge (gasta tokens).")
     parser.add_argument("--judge-limit", type=int, default=12, help="Cuántas trazas puntuar.")
     parser.add_argument(
+        "--judge-scores",
+        type=Path,
+        default=None,
+        help="JSON persistido por `python -m eval.judge score`.",
+    )
+    parser.add_argument(
+        "--judge-agreement",
+        type=Path,
+        default=None,
+        help="JSON persistido por `python -m eval.judge compare`.",
+    )
+    parser.add_argument(
         "--allow-dry-run",
         action="store_true",
         help="Permite informar sobre corridas con LLM falso (solo para inspeccionar la infra).",
@@ -308,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
         judge=args.judge,
         judge_limit=args.judge_limit,
         allow_dry_run=args.allow_dry_run,
+        judge_scores_path=args.judge_scores,
+        judge_agreement_path=args.judge_agreement,
     )
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

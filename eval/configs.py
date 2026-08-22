@@ -18,33 +18,61 @@ CONFIGS: dict[str, dict[str, Any]] = {
         "prompt": "escape_v1",
         "max_iterations": 40,
         "max_history_messages": 40,
+        "repair_textual_tool_calls": True,
     },
     # --- experimento A: prompting genérico vs especializado ----------------
     "prompt_baseline": {
         "prompt": "baseline",
         "max_iterations": 40,
         "max_history_messages": 40,
+        "repair_textual_tool_calls": True,
     },
     # --- experimento B: tamaño de la ventana de memoria --------------------
-    "mem_6": {"prompt": "escape_v1", "max_iterations": 40, "max_history_messages": 6},
-    "mem_20": {"prompt": "escape_v1", "max_iterations": 40, "max_history_messages": 20},
-    "mem_40": {"prompt": "escape_v1", "max_iterations": 40, "max_history_messages": 40},
+    "mem_6": {
+        "prompt": "escape_v1",
+        "max_iterations": 40,
+        "max_history_messages": 6,
+        "repair_textual_tool_calls": True,
+    },
+    "mem_20": {
+        "prompt": "escape_v1",
+        "max_iterations": 40,
+        "max_history_messages": 20,
+        "repair_textual_tool_calls": True,
+    },
+    "mem_40": {
+        "prompt": "escape_v1",
+        "max_iterations": 40,
+        "max_history_messages": 40,
+        "repair_textual_tool_calls": True,
+    },
     # --- experimento C: ablación de herramientas y presupuesto -------------
     "noop_examine": {
         "prompt": "escape_v1",
         "max_iterations": 40,
         "max_history_messages": 40,
+        "repair_textual_tool_calls": True,
         "noop_tools": ["examine"],
     },
-    "iters_10": {"prompt": "escape_v1", "max_iterations": 10, "max_history_messages": 40},
-    "iters_20": {"prompt": "escape_v1", "max_iterations": 20, "max_history_messages": 40},
+    "iters_10": {
+        "prompt": "escape_v1",
+        "max_iterations": 10,
+        "max_history_messages": 40,
+        "repair_textual_tool_calls": True,
+    },
+    "iters_20": {
+        "prompt": "escape_v1",
+        "max_iterations": 20,
+        "max_history_messages": 40,
+        "repair_textual_tool_calls": True,
+    },
     # --- experimento D: reparación de tool calls emitidas como texto -------
-    # `baseline` es el brazo de control (reparación OFF).
-    "repair_on": {
+    # `baseline` es el sistema final (reparación ON); este es su ablación.
+    "repair_off": {
         "prompt": "escape_v1",
         "max_iterations": 40,
         "max_history_messages": 40,
-        "repair_textual_tool_calls": True,
+        "repair_textual_tool_calls": False,
     },
 }
 
@@ -53,7 +81,7 @@ SUITES: dict[str, list[str]] = {
     "exp_a": ["baseline", "prompt_baseline"],
     "exp_b": ["mem_6", "mem_20", "mem_40"],
     "exp_c": ["baseline", "noop_examine", "iters_10", "iters_20"],
-    "exp_d": ["baseline", "repair_on"],
+    "exp_d": ["baseline", "repair_off"],
 }
 
 
