@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "judge_scores": "reports/judge-scores-20260822T225250Z.json",
+    "human_scores": "reports/human-scores-20260822T225250Z.json",
+    "n": 10
+  },
+  "agreement": {
+    "exploracion": {
+      "n": 10,
+      "exact_agreement": 0.6,
+      "within_1": 0.9,
+      "mean_abs_diff": 0.5
+    },
+    "uso_evidencia": {
+      "n": 10,
+      "exact_agreement": 0.4,
+      "within_1": 0.6,
+      "mean_abs_diff": 1.0
+    },
+    "recuperacion": {
+      "n": 10,
+      "exact_agreement": 0.4,
+      "within_1": 0.5,
+      "mean_abs_diff": 1.3
+    }
+  }
+}

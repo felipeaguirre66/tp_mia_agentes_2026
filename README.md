@@ -454,7 +454,7 @@ ablaciones. Ese entregable está descrito en [`ENUNCIADO_M3.md`](../ENUNCIADO_M3
 
 ### Evaluación reproducible del M3
 
-Con el entorno virtual activo y Ollama en ejecución:
+Con el entorno virtual activo, Ollama en ejecución y `qwen3.6` disponible:
 
 ```bash
 # Verifica el circuito completo sin usar un modelo real.
@@ -492,6 +492,11 @@ python -m eval.judge compare \
   --human reports/human-scores-<stamp>.json \
   --out reports/judge-agreement-<stamp>.json
 ```
+
+La corrida final validada contiene **8 escenarios y 120 casos reales**. Sus
+resultados, checksums y conclusiones están en
+`results/final-20260822T225250Z/`, `reports/m3-20260822T225250Z.md` e
+`INFORME_OBLIGATORIO_M3.md`.
 
 ### Nota sobre contexto con Ollama
 
