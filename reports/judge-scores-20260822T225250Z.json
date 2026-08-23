@@ -1,0 +1,131 @@
+{
+  "_meta": {
+    "provider": "ollama",
+    "model": "qwen3.6",
+    "git_sha": "210eb1f",
+    "sample_policy": "baseline repeat=0 por escenario + fallos más largos",
+    "n": 10
+  },
+  "scores": [
+    {
+      "scenario": "study-with-key",
+      "difficulty": "easy",
+      "config": "baseline",
+      "repeat": 0,
+      "goal_achieved": true,
+      "exploracion": 5,
+      "uso_evidencia": 5,
+      "recuperacion": 5,
+      "justificacion": "El agente inició con `look` para mapear el entorno [0] y examinó sistemáticamente un objeto visible (`alfombra`) para hallar la llave [1]. Utilizó exclusivamente los IDs reportados por las herramientas en cada paso subsiguiente [2][3], demostrando un proceso lógico, coherente y sin errores.",
+      "judge_error": null
+    },
+    {
+      "scenario": "apartment-keys",
+      "difficulty": "medium",
+      "config": "baseline",
+      "repeat": 0,
+      "goal_achieved": true,
+      "exploracion": 5,
+      "uso_evidencia": 5,
+      "recuperacion": 5,
+      "justificacion": "El agente ejecutó una exploración sistemática con `look` en cada nueva ubicación ([0], [2], [4]) antes de interactuar. Referenció correctamente los IDs reportados por las herramientas (`cajon`, `llave_oro`) y completó el objetivo sin cometer errores ni repetir acciones fallidas.",
+      "judge_error": null
+    },
+    {
+      "scenario": "color-locks",
+      "difficulty": "medium",
+      "config": "baseline",
+      "repeat": 0,
+      "goal_achieved": true,
+      "exploracion": 5,
+      "uso_evidencia": 5,
+      "recuperacion": 5,
+      "justificacion": "El agente inició con una observación general (paso [0]) y examinó sistemáticamente los cofres para localizar las llaves en cadena. Referenció correctamente objetos visibles o hallados en otros contenedores, corrigiendo su error de inventario en el paso [8] al tomar la llave roja antes de usarla en el paso [9].",
+      "judge_error": null
+    },
+    {
+      "scenario": "library-search",
+      "difficulty": "hard",
+      "config": "baseline",
+      "repeat": 0,
+      "goal_achieved": true,
+      "exploracion": 5,
+      "uso_evidencia": 5,
+      "recuperacion": 5,
+      "justificacion": "El agente exploró el entorno de forma exhaustiva examinando el escritorio [1], la estantería [2] y cada libro antes de actuar. Su uso de evidencia fue riguroso, encadenando objetos hallados como la llave [12] y la llave grabada [15]. La ejecución fue impecable y lógica.",
+      "judge_error": null
+    },
+    {
+      "scenario": "office-sequence",
+      "difficulty": "hard",
+      "config": "baseline",
+      "repeat": 0,
+      "goal_achieved": false,
+      "exploracion": 3,
+      "uso_evidencia": 5,
+      "recuperacion": 5,
+      "justificacion": "El agente observó primero [0] pero al abandonar la sala inmediatamente [1] sin interactuar con los objetos visibles, omitió una exploración sistemática. Sus acciones se basaron estrictamente en la evidencia reportada y no hubo errores de ejecución que requirieran corrección.",
+      "judge_error": null
+    },
+    {
+      "scenario": "backtracking-vault",
+      "difficulty": "extreme",
+      "config": "baseline",
+      "repeat": 0,
+      "goal_achieved": false,
+      "exploracion": 1,
+      "uso_evidencia": 1,
+      "recuperacion": 1,
+      "justificacion": "El agente no realizó ninguna llamada de herramienta ni dio respuesta en la traza (índice 0). Al no haber interacción con el entorno, falló completamente en explorar, utilizar evidencia o recuperar errores.",
+      "judge_error": null
+    },
+    {
+      "scenario": "extreme-archive",
+      "difficulty": "extreme",
+      "config": "baseline",
+      "repeat": 0,
+      "goal_achieved": false,
+      "exploracion": 4,
+      "uso_evidencia": 5,
+      "recuperacion": 5,
+      "justificacion": "El agente comenzó con una observación ([0]) antes de actuar, y luego examinó un elemento descrito en dicha observación ([1]), respetando la evidencia disponible. No se registraron errores en la traza que requirieran corrección.",
+      "judge_error": null
+    },
+    {
+      "scenario": "vault-combination",
+      "difficulty": "extreme",
+      "config": "baseline",
+      "repeat": 0,
+      "goal_achieved": false,
+      "exploracion": 3,
+      "uso_evidencia": 5,
+      "recuperacion": 5,
+      "justificacion": "El agente exploró el entorno de forma lógica y usó correctamente los IDs reportados ([6], [7]), pero cometió una redundancia grave al ejecutar `look` dos veces seguidas en la misma sala ([2] y [3]). No se registraron errores de herramienta que requirieran ajuste.",
+      "judge_error": null
+    },
+    {
+      "scenario": "vault-combination",
+      "difficulty": "extreme",
+      "config": "baseline",
+      "repeat": 2,
+      "goal_achieved": false,
+      "exploracion": 5,
+      "uso_evidencia": 5,
+      "recuperacion": 2,
+      "justificacion": "El agente realizó una exploración exhaustiva y sistemática, visitando todas las salas y examinando los objetos para obtener los tres núcleos (pasos 4, 11, 16). El uso de evidencia fue impecable, referenciando siempre IDs correctos sin inventar nada (ej. pasos 5, 12, 19). Sin embargo, falló en la recuperación y estrategia: ignoró las señales de que las puertas ya estaban abiertas (pasos 32, 39) y persistió en bucles redundantes en lugar de volver al Vestíbulo para usar los núcleos.",
+      "judge_error": null
+    },
+    {
+      "scenario": "extreme-archive",
+      "difficulty": "extreme",
+      "config": "baseline",
+      "repeat": 2,
+      "goal_achieved": false,
+      "exploracion": 3,
+      "uso_evidencia": 2,
+      "recuperacion": 5,
+      "justificacion": "El agente realizó una exploración inicial básica (`look` y `examine`) pero se limitó a la estantería sin verificar la puerta u otros elementos clave para un nivel extreme (exploracion 3). Su uso de evidencia es deficiente al introducir IDs como `expediente_1042` en [4] que no fueron reportados por las herramientas previas, sugiriendo invención o adivinanza (uso_evidencia 2). Sin embargo, recuperó eficazmente el error de toma en [2] cambiando a examen en [3], adaptando su estrategia correctamente (recuperacion 5).",
+      "judge_error": null
+    }
+  ]
+}

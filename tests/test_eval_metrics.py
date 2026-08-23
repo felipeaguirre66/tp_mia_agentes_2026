@@ -97,6 +97,13 @@ def test_premature_stop_when_answer_is_plain_prose() -> None:
     assert c["primary_failure"] == "premature_stop"
 
 
+def test_empty_response_after_partial_trace_is_classified() -> None:
+    c = classify(_case(answer="", trace=[{
+        "index": 0, "tool": "look", "args": {}, "output": "sala", "is_error": False,
+    }]))
+    assert c["primary_failure"] == "empty_response"
+
+
 def test_loop_needs_three_identical_calls() -> None:
     two = [{"index": i, "tool": "look", "args": {}, "output": "ok", "is_error": False} for i in range(2)]
     assert "loop" not in classify(_case(trace=two, n_tool_calls=2))["labels"]
@@ -388,6 +395,48 @@ def test_report_accepts_real_results(tmp_path: Path) -> None:
         }}) + "\n")
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     assert "pass@1" in build_report([path])
+
+
+def test_report_cli_reconfigures_windows_stdout_to_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import eval.report as report_module
+
+    rec = run_case("study-with-key", llm_client=LookOnceLLM())
+    path = tmp_path / "real.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"_meta": {
+            "dry_run": False, "model": "x", "provider": "y", "git_sha": "abc",
+            "scenarios": ["study-with-key"], "repeats": 1,
+            "configs": {"baseline": {}, "prompt_baseline": {}},
+        }}) + "\n")
+        for config in ("baseline", "prompt_baseline"):
+            fh.write(json.dumps({**rec, "config": config}, ensure_ascii=False) + "\n")
+
+    class Cp1252Stdout:
+        encoding = "cp1252"
+
+        def __init__(self) -> None:
+            self.parts: list[str] = []
+
+        def reconfigure(self, *, encoding: str) -> None:
+            self.encoding = encoding
+
+        def write(self, value: str) -> int:
+            assert self.encoding == "utf-8"
+            self.parts.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            pass
+
+    stdout = Cp1252Stdout()
+    monkeypatch.setattr(report_module.sys, "stdout", stdout)
+    out = tmp_path / "report.md"
+    assert report_module.main([str(path), "-o", str(out)]) == 0
+    assert stdout.encoding == "utf-8"
+    assert "# Informe de evaluación — M3" in "".join(stdout.parts)
+    assert out.is_file()
 
 
 def test_report_reads_persisted_qualitative_artifacts(tmp_path: Path) -> None:

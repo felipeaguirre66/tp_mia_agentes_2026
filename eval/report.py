@@ -495,6 +495,9 @@ def main(argv: list[str] | None = None) -> int:
     out_path = Path(args.out) if args.out else REPORTS_DIR / f"report-{stamp}.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report, encoding="utf-8")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8")
     print(report)
     print(f"# -> {out_path}", file=sys.stderr)
     return 0

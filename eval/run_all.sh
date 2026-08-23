@@ -53,18 +53,40 @@ echo "### informe"
 "$PYTHON_BIN" eval/report.py "$OUT"/*.jsonl -o "reports/m3-${STAMP}.md"
 
 echo "### manifiesto"
+GIT_SHA="$(git rev-parse HEAD)"
+PYTHON_VERSION="$("$PYTHON_BIN" --version 2>&1)"
 {
   echo "# Manifest de resultados M3"
   echo
   echo "- Timestamp UTC: $STAMP"
-  echo "- Git SHA: $(git rev-parse --short HEAD)"
+  printf -- '- Proveedor: `%s`\n' "ollama"
+  printf -- '- Modelo: `%s`\n' "qwen3.6"
+  printf -- '- Git SHA: `%s`\n' "$GIT_SHA"
+  printf -- '- Python: `%s`\n' "$PYTHON_VERSION"
   echo "- Casos esperados: $((40 * REPEATS))"
   echo
-  echo "## SHA-256"
+  echo "## Comandos"
   echo
-  echo '```text'
-  sha256sum "$OUT"/*.jsonl
+  echo '```bash'
+  printf 'PYTHON_BIN=%q REPEATS=%q bash eval/run_all.sh\n' "$PYTHON_BIN" "$REPEATS"
+  printf '%q eval/run.py --scenarios easy,medium --repeats %q --out %q\n' "$PYTHON_BIN" "$REPEATS" "$OUT/baseline-a.jsonl"
+  printf '%q eval/run.py --scenarios hard --repeats %q --out %q\n' "$PYTHON_BIN" "$REPEATS" "$OUT/baseline-b.jsonl"
+  printf '%q eval/run.py --scenarios extreme --repeats %q --timeout 600 --out %q\n' "$PYTHON_BIN" "$REPEATS" "$OUT/baseline-c.jsonl"
+  printf '%q eval/run.py --config prompt_baseline --scenarios medium,hard --repeats %q --out %q\n' "$PYTHON_BIN" "$REPEATS" "$OUT/exp-a.jsonl"
+  printf '%q eval/run.py --config mem_6,mem_20 --scenarios medium,hard --repeats %q --out %q\n' "$PYTHON_BIN" "$REPEATS" "$OUT/exp-b.jsonl"
+  printf '%q eval/run.py --config noop_examine,iters_10,iters_20 --scenarios medium,hard --repeats %q --out %q\n' "$PYTHON_BIN" "$REPEATS" "$OUT/exp-c.jsonl"
+  printf '%q eval/run.py --config repair_off --scenarios all --repeats %q --timeout 600 --out %q\n' "$PYTHON_BIN" "$REPEATS" "$OUT/exp-d.jsonl"
   echo '```'
+  echo
+  echo "## Archivos"
+  echo
+  echo "| archivo | bytes | SHA-256 |"
+  echo "|---|---:|---|"
+  for file in "$OUT"/*.jsonl; do
+    bytes="$(wc -c < "$file")"
+    checksum="$(sha256sum "$file" | cut -d ' ' -f 1)"
+    printf '| `%s` | %s | `%s` |\n' "$(basename "$file")" "$bytes" "$checksum"
+  done
 } > "$OUT/MANIFEST.md"
 echo
 echo "Resultados crudos: $OUT/"

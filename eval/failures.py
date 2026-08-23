@@ -45,6 +45,7 @@ PRIORITY = [
     "no_exploration",
     "navigation_lost",
     "wrong_order",
+    "empty_response",
     "premature_stop",
     "no_tool_calls",
     "unclassified",
@@ -64,6 +65,7 @@ DESCRIPTIONS = {
     "no_exploration": "Intentó `use`/`take` sin haber explorado antes.",
     "navigation_lost": "Falló al navegar: dirección inexistente o salida bloqueada.",
     "wrong_order": "Violó el orden del goal compuesto (abrió la puerta antes de tiempo).",
+    "empty_response": "El LLM cerró sin tool call y sin contenido antes de cumplir el goal.",
     "premature_stop": "Cerró con texto declarando el final sin haber cumplido el goal.",
     "unclassified": "Fallo sin categoría automática: requiere revisión manual.",
 }
@@ -158,6 +160,8 @@ def classify(record: dict[str, Any]) -> dict[str, Any]:
             evidence["event_log"] = log
 
     # --- cierre prematuro ---------------------------------------------------
+    if status == "ok" and not record.get("agent_error") and not answer and trace:
+        labels.append("empty_response")
     if status == "ok" and not record.get("agent_error") and answer and "text_tool_call" not in labels:
         labels.append("premature_stop")
         evidence.setdefault("answer", answer[:300])
