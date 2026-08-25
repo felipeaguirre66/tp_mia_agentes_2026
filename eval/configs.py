@@ -46,6 +46,15 @@ CONFIGS: dict[str, dict[str, Any]] = {
         "max_history_messages": 40,
         "repair_textual_tool_calls": True,
     },
+    # --- experimento E: gate de confirmación de objetivo -------------------
+    # El gate está ON por defecto (ver build_agent); `baseline` ya lo corre
+    # activado. Este brazo lo apaga para aislar su efecto.
+    "goal_gate_off": {
+        "prompt": "escape_v1",
+        "max_iterations": 40,
+        "max_history_messages": 40,
+        "require_goal_confirmation": False,
+    },
 }
 
 #: Agrupaciones cómodas para `python eval/run.py --config exp_a`.
@@ -54,6 +63,7 @@ SUITES: dict[str, list[str]] = {
     "exp_b": ["mem_6", "mem_20", "mem_40"],
     "exp_c": ["baseline", "noop_examine", "iters_10", "iters_20"],
     "exp_d": ["baseline", "repair_on"],
+    "exp_e": ["baseline", "goal_gate_off"],
 }
 
 

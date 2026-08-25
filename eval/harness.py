@@ -108,7 +108,7 @@ def run_case(
         probe = CountingLLM(client)
 
         agent = build_agent(
-            {**config, "world": world, "tools": pairs, "llm_client": probe}
+            {**config, "world": world, "tools": pairs, "llm_client": probe, "goal": sc.goal}
         )
         result = agent.run(sc.user_message)
     except BudgetExceeded as exc:
@@ -142,6 +142,7 @@ def run_case(
             "output_tokens": getattr(result, "output_tokens", None),
             **(probe.stats() if probe else {}),
             "repaired_tool_calls": getattr(agent, "repaired_tool_calls", 0),
+            "goal_gate_triggers": getattr(agent, "goal_gate_triggers", 0),
             "final_state": {
                 "room": world.current_room,
                 "inventory": list(world.inventory),

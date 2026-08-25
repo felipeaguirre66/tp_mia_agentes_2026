@@ -79,6 +79,13 @@ def build_agent(config: dict[str, Any] | None = None) -> Agent:
     ``max_iterations``, ``max_history_messages``,
     ``max_transient_retries``, ``transient_retry_delay``
         Se pasan tal cual al constructor de `MyAgent`.
+    ``goal``
+        Goal spec del escenario (`mia_world.check_goal`). Junto con
+        ``world``, habilita el gate del experimento E.
+    ``require_goal_confirmation``
+        Si el bucle debe rechazar un cierre en texto mientras
+        `check_goal(world, goal)` no confirme éxito. Default ``True``
+        cuando hay ``world`` y ``goal``; sin efecto en modo genérico.
     """
 
     config = config or {} #NO CAMBIAR
@@ -109,6 +116,18 @@ def build_agent(config: dict[str, Any] | None = None) -> Agent:
         kwargs["system_prompt"] = get_prompt(config["prompt"])
     elif world_mode:
         kwargs["system_prompt"] = ESCAPE_V1
+
+    # --- gate de confirmación de objetivo (experimento E) -----------------
+    # Activo por defecto en modo mundo; el brazo `goal_gate_off` lo apaga
+    # vía config para aislar el efecto en el experimento.
+    goal_spec = config.get("goal")
+    if world is not None and goal_spec is not None and config.get("require_goal_confirmation", True):
+        from mia_world import check_goal
+
+        def _goal_check(_world: Any = world, _goal: Any = goal_spec) -> bool:
+            return check_goal(_world, _goal)[0]
+
+        kwargs["goal_check"] = _goal_check
 
     agent = MyAgent(**kwargs)
 
