@@ -64,8 +64,19 @@ def _parse_line(line: str) -> tuple[str, str] | None:
     key, _, value = line.partition("=")
     key = key.strip()
     value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        value = value[1:-1]
+    if value and value[0] in ("'", '"'):
+        # Valor entre comillas: cortar en la comilla de cierre y descartar
+        # cualquier comentario `# ...` que venga después (si no, queda
+        # pegado al valor, p. ej. `"llama3.1"  # opcional` -> valor roto).
+        end = value.find(value[0], 1)
+        value = value[1:end] if end != -1 else value[1:]
+    else:
+        # Sin comillas: un `#` a un espacio de distancia es un comentario.
+        for marker in (" #", "\t#"):
+            idx = value.find(marker)
+            if idx != -1:
+                value = value[:idx]
+        value = value.strip()
     if not key:
         return None
     return key, value

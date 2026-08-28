@@ -6,3 +6,10 @@
 .env
 feli.md
 ENUNCIADO_M2.md
+
+# M3: resultados crudos de la evaluación (pesados, regenerables)
+results/*.jsonl
+!results/.gitkeep
+.env.bak
+.env.*
+*jsonl

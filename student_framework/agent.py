@@ -19,6 +19,8 @@ from mia_agents.protocols import LLMClient
 from mia_agents.types import AgentResult, AgentStep, ToolSchema
 from mia_agents.tool_schema import FINAL_RESULT_TOOL_NAME, final_result_tool_schema
 
+from .repair import extract_tool_calls
+
 _T = TypeVar("_T")
 
 
@@ -52,7 +54,9 @@ class MyAgent:
         max_iterations: int = 10,
         max_history_messages: int = 10,
         max_transient_retries: int = 3,
-        transient_retry_delay: float = 0.0
+        transient_retry_delay: float = 0.0,
+        repair_textual_tool_calls: bool = False,
+        goal_check: Callable[[], bool] | None = None,
     ) -> None:
         """Inicializa el agente.
 
@@ -83,6 +87,18 @@ class MyAgent:
         self._history: list[dict[str, Any]] = []
         self._max_transient_retries = max(0, max_transient_retries)
         self._transient_retry_delay = max(0.0, transient_retry_delay)
+        # M3 (experimento D): recuperar tool calls que el modelo emitió como
+        # texto en vez de como tool_call estructurada. OFF por defecto: el
+        # baseline y los tests de conformidad ven el bucle ReAct clásico.
+        self._repair_textual_tool_calls = repair_textual_tool_calls
+        #: Cuántas tool calls se recuperaron del texto en esta instancia.
+        self.repaired_tool_calls = 0
+        # M3 (experimento E): no aceptar una respuesta de texto como final si
+        # `goal_check()` dice que el objetivo aún no se cumplió. None (default)
+        # preserva el bucle ReAct clásico de M1/M2.
+        self._goal_check = goal_check
+        #: Cuántas veces se rechazó un cierre prematuro en esta instancia.
+        self.goal_gate_triggers = 0
 
     def _call_with_retry(self, operation: Callable[[], _T]) -> _T:
         """Ejecuta `operation` reintentando solo fallos transitorios."""
@@ -228,7 +244,33 @@ class MyAgent:
             output_tokens_total += response.output_tokens
             saw_output_tokens = True
 
-          if not response.tool_calls:
+          tool_calls = list(response.tool_calls or [])
+
+          # Sin tool_calls estructuradas, el modelo puede igualmente haber
+          # pedido una acción en prosa. Tratar eso como respuesta final corta
+          # el episodio justo cuando el agente iba a corregirse.
+          if not tool_calls and self._repair_textual_tool_calls:
+            recovered = extract_tool_calls(
+              response.content,
+              self._tools.keys(),
+              id_prefix=f"repair{len(steps)}",
+            )
+            if recovered:
+              tool_calls = recovered
+              self.repaired_tool_calls += len(recovered)
+
+          if not tool_calls:
+            if self._goal_check is not None and not self._goal_check():
+              self.goal_gate_triggers += 1
+              messages.append({"role": "assistant", "content": response.content or ""})
+              messages.append({
+                "role": "user",
+                "content": (
+                  "El objetivo todavía no se cumplió: seguí usando las "
+                  "herramientas para lograrlo."
+                ),
+              })
+              continue
             answer = response.content or ""
             messages.append({"role": "assistant", "content": answer})
             break
@@ -246,12 +288,12 @@ class MyAgent:
                     "arguments": tool_call.arguments,
                   },
                 }
-                for tool_call in response.tool_calls
+                for tool_call in tool_calls
               ],
             }
           )
 
-          for tool_call in response.tool_calls:
+          for tool_call in tool_calls:
             tool_output: str | None = None
             tool_error: str | None = None
 
