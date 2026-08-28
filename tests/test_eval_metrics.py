@@ -200,7 +200,13 @@ def test_repair_is_off_by_default_and_stops_the_episode() -> None:
                 return LLMResponse(content='{"name": "use", "parameters": {"item": "llave_oro", "target": "puerta_principal"}}')
             return LLMResponse(content="Listo, salí.")
 
-    off = run_case("study-with-key", "baseline", llm_client=TextualLLM())
+    # Gate del experimento E apagado: aislá el efecto de la reparación.
+    off = run_case(
+        "study-with-key",
+        "baseline",
+        llm_client=TextualLLM(),
+        extra_config={"require_goal_confirmation": False},
+    )
     assert off["n_tool_calls"] == 0, "sin reparación no debe ejecutarse ninguna tool"
     assert off["goal_achieved"] is False
     assert off["repaired_tool_calls"] == 0
@@ -220,10 +226,46 @@ def test_repair_does_not_fire_on_plain_prose() -> None:
         def chat(self, messages, tools=None, system=None, temperature=0.2, response_format=None):
             return LLMResponse(content="Usé examine sobre la alfombra y tomé la llave. Ya está.")
 
-    rec = run_case("study-with-key", "repair_on", llm_client=ProseLLM())
+    # Gate del experimento E apagado: aislá el efecto de la reparación.
+    rec = run_case(
+        "study-with-key",
+        "repair_on",
+        llm_client=ProseLLM(),
+        extra_config={"require_goal_confirmation": False},
+    )
     assert rec["repaired_tool_calls"] == 0
     assert rec["n_tool_calls"] == 0
     assert classify(rec)["primary_failure"] == "premature_stop"
+
+
+# --- experimento E: gate de confirmación de objetivo -------------------------
+
+
+def test_goal_gate_blocks_premature_stop_by_default() -> None:
+    """El baseline (gate ON) no acepta un cierre en texto si el goal no se cumplió."""
+    rec = run_case("study-with-key", "baseline", llm_client=LookOnceLLM())
+    assert rec["goal_achieved"] is False
+    assert rec["goal_gate_triggers"] > 0
+    assert classify(rec)["primary_failure"] == "max_iterations"
+
+
+def test_goal_gate_off_restores_immediate_premature_stop() -> None:
+    """`goal_gate_off` reproduce el corte inmediato clásico (sin gate)."""
+    rec = run_case("study-with-key", "goal_gate_off", llm_client=LookOnceLLM())
+    assert rec["goal_achieved"] is False
+    assert rec["goal_gate_triggers"] == 0
+    assert classify(rec)["primary_failure"] == "premature_stop"
+
+
+def test_goal_gate_does_not_interfere_once_goal_is_met() -> None:
+    """Con el objetivo cumplido, el gate deja pasar el cierre sin fricción."""
+    rec = run_case(
+        "study-with-key",
+        "baseline",
+        llm_client=ScriptedLLM(WINNING_SCRIPTS["study-with-key"]),
+    )
+    assert rec["goal_achieved"] is True
+    assert rec["goal_gate_triggers"] == 0
 
 
 # --- salvaguarda contra informar sobre datos falsos --------------------------

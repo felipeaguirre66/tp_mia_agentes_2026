@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Corrida completa de M3: baseline + los cuatro experimentos + informe.
+# Corrida completa de M3: baseline + los cuatro experimentos + informe
+# (con y sin rúbrica LLM-as-judge).
 #
-#   bash eval/run_all.sh            # completo (~1-3 h con un 8B local)
-#   REPEATS=1 bash eval/run_all.sh  # pasada rápida para ver que todo fluye
+#   bash eval/run_all.sh                     # completo (~1-3 h con un 8B local)
+#   REPEATS=1 bash eval/run_all.sh           # pasada rápida para ver que todo fluye
+#   JUDGE_LIMIT=20 bash eval/run_all.sh      # puntuar más trazas con el juez
 #
 # `baseline` se corre UNA vez y se reusa como brazo de control de todos los
 # experimentos: las suites exp_* lo incluyen por comodidad, pero correrlas
@@ -40,8 +42,10 @@ python eval/run.py --config repair_on --scenarios all --repeats "$REPEATS" --tim
 echo "### informe"
 python eval/report.py "$OUT"/*.jsonl -o "reports/m3-${STAMP}.md"
 echo
+echo "### rúbrica (LLM-as-judge)"
+JUDGE_LIMIT="${JUDGE_LIMIT:-12}"
+python eval/report.py "$OUT"/*.jsonl --judge --judge-limit "$JUDGE_LIMIT" -o "reports/m3-${STAMP}-judged.md"
+echo
 echo "Resultados crudos: $OUT/"
 echo "Informe:           reports/m3-${STAMP}.md"
-echo
-echo "Para agregar la rúbrica (gasta tokens, ~1 llamada por traza):"
-echo "  python eval/report.py $OUT/*.jsonl --judge --judge-limit 12 -o reports/m3-${STAMP}-judged.md"
+echo "Informe + rúbrica: reports/m3-${STAMP}-judged.md"

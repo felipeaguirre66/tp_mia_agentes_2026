@@ -60,6 +60,8 @@ SUMMARY_COLS = [
     ("tool_error_rate", "err. tools"),
     ("median_tool_calls", "calls (mediana)"),
     ("median_latency_s", "latencia s"),
+    ("mean_input_tokens", "tokens in"),
+    ("mean_output_tokens", "tokens out"),
 ]
 
 

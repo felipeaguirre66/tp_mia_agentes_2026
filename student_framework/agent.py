@@ -56,6 +56,7 @@ class MyAgent:
         max_transient_retries: int = 3,
         transient_retry_delay: float = 0.0,
         repair_textual_tool_calls: bool = False,
+        goal_check: Callable[[], bool] | None = None,
     ) -> None:
         """Inicializa el agente.
 
@@ -92,6 +93,12 @@ class MyAgent:
         self._repair_textual_tool_calls = repair_textual_tool_calls
         #: Cuántas tool calls se recuperaron del texto en esta instancia.
         self.repaired_tool_calls = 0
+        # M3 (experimento E): no aceptar una respuesta de texto como final si
+        # `goal_check()` dice que el objetivo aún no se cumplió. None (default)
+        # preserva el bucle ReAct clásico de M1/M2.
+        self._goal_check = goal_check
+        #: Cuántas veces se rechazó un cierre prematuro en esta instancia.
+        self.goal_gate_triggers = 0
 
     def _call_with_retry(self, operation: Callable[[], _T]) -> _T:
         """Ejecuta `operation` reintentando solo fallos transitorios."""
@@ -253,6 +260,17 @@ class MyAgent:
               self.repaired_tool_calls += len(recovered)
 
           if not tool_calls:
+            if self._goal_check is not None and not self._goal_check():
+              self.goal_gate_triggers += 1
+              messages.append({"role": "assistant", "content": response.content or ""})
+              messages.append({
+                "role": "user",
+                "content": (
+                  "El objetivo todavía no se cumplió: seguí usando las "
+                  "herramientas para lograrlo."
+                ),
+              })
+              continue
             answer = response.content or ""
             messages.append({"role": "assistant", "content": answer})
             break
